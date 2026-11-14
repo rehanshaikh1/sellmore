@@ -1,0 +1,1051 @@
+
+Paste November 11, 2026 - 12:00AM
+# MASTER FRONTEND DEVELOPMENT PROMPT — SELLMORE
+## Complete React SaaS Application | Responsive UI | Frontend Only
+
+Act as a **Senior React Frontend Developer, Frontend Architect, UI/UX Designer, and Enterprise SaaS Application Specialist**.
+
+I am attaching the complete SellMore Product Requirements Document (PRD) and UI Generation Specification.
+
+Your responsibility is to carefully analyse the ENTIRE attached document and transform it into a complete, professional, fully interactive, production-quality React frontend application.
+
+You are not being asked to create just a dashboard, landing page, or visual prototype.
+
+You must develop the complete frontend application, including all screens, routes, layouts, navigation, dashboards, modules, forms, tables, charts, interactions, role-specific experiences, and customer journeys described in the attached document.
+
+<IMPORTANT>
+**STRICTLY FRONTEND ONLY. DO NOT BUILD A BACKEND.**
+
+The final application must be built using React, TypeScript, Vite, React Router DOM, Tailwind CSS, reusable React components, frontend state management, and realistic mock data.
+
+Every screen must be functional on the frontend and completely responsive across desktop, tablet, and mobile devices.
+</IMPORTANT>
+
+# 1. MANDATORY TECHNOLOGY STACK
+
+Use the following frontend technologies:
+
+### Core
+- React 19
+- TypeScript
+- Vite
+- React Router DOM v7
+- Tailwind CSS
+- HTML5
+- CSS3
+
+### UI Components and Design
+- Lucide React for icons.
+- shadcn/ui for reusable UI components where appropriate.
+- Radix UI for accessible component primitives.
+- Framer Motion for subtle animations.
+- Recharts for analytics and charts.
+
+### Forms and Validation
+- React Hook Form.
+- Zod.
+
+### State Management
+- Zustand for global state management.
+- React Context for shared providers where appropriate.
+- React useState and useReducer for local component state.
+
+### Utilities
+- date-fns for date formatting.
+- Sonner or React Hot Toast for notifications.
+
+Use compatible and stable package versions. Avoid unnecessary dependencies.
+
+# 2. STRICT FRONTEND-ONLY SCOPE
+
+This project requires frontend development only.
+
+Do NOT create:
+- Backend servers.
+- Node.js, Express, NestJS, Python, or FastAPI backend applications.
+- PHP or Laravel applications.
+- REST or GraphQL backend APIs.
+- Database schemas or migrations.
+- Database connections.
+- Server-side authentication.
+- Backend business logic.
+- Backend infrastructure.
+
+Instead, simulate application functionality using:
+
+- Realistic mock JSON data.
+- TypeScript mock datasets.
+- Frontend service functions.
+- Zustand stores.
+- React Context.
+- localStorage.
+- sessionStorage.
+- Simulated API responses.
+- Mock loading, success, and error states.
+
+All frontend interactions should work wherever applicable.
+
+For example:
+- Creating a record should update the local frontend state.
+- Editing a record should update the displayed data.
+- Deleting a record should remove it from the relevant interface.
+- Changing filters should update the displayed results.
+- Switching roles should change the available navigation.
+- Changing plan status should update feature availability.
+- Completing a simulated workflow should display its result.
+
+Structure the frontend so that real backend APIs can be integrated in the future without rebuilding the UI.
+
+Do not pretend that an external API or integration is operational when it is only simulated.
+
+# 3. COMPLETE DOCUMENT ANALYSIS — SINGLE SOURCE OF TRUTH
+
+Before writing code, read and understand the complete attached document.
+
+Analyse:
+- Every section.
+- Every table.
+- Every module.
+- Every screen description.
+- Every customer journey.
+- Every role and permission.
+- Every plan restriction.
+- Every interaction.
+- Every workflow.
+- Every acceptance criterion.
+- Every pending Product Owner decision.
+
+Create an internal implementation inventory containing:
+
+1. All required screens.
+2. All required routes.
+3. All user roles.
+4. All navigation items.
+5. All reusable components.
+6. All required interactions.
+7. All frontend data structures.
+8. All responsive layouts.
+9. All feature restrictions.
+10. All acceptance criteria.
+
+Important rules:
+
+- Do not skip requirements.
+- Do not simplify complex modules into generic pages.
+- Do not invent features or business rules.
+- Preserve the terminology used in the document.
+- Preserve the distinction between confirmed, proposed, pending decision, and excluded requirements.
+- Do not silently resolve Product Owner decisions through assumptions.
+
+The attached document takes priority over the example architecture in this prompt.
+
+# 4. REACT DEVELOPMENT STANDARDS
+
+Build the application using proper React architecture.
+
+Mandatory requirements:
+
+1. Use functional React components.
+2. Use TypeScript throughout.
+3. Use JSX/TSX components.
+4. Use React Hooks correctly.
+5. Use reusable components.
+6. Use proper props and TypeScript interfaces.
+7. Separate UI from application logic.
+8. Use custom hooks where appropriate.
+9. Use Zustand or Context for shared state.
+10. Avoid unnecessary component re-renders.
+11. Use route-level lazy loading where appropriate.
+12. Use React Suspense for lazy-loaded routes.
+13. Implement error boundaries.
+14. Maintain consistent naming conventions.
+15. Keep components modular and maintainable.
+
+Do not place the entire application in App.tsx.
+
+Do not create one enormous component for an entire module.
+
+Do not use static HTML pages as substitutes for React components.
+
+Every application screen must be implemented as an actual React page or component.
+
+# 5. PROJECT FOLDER STRUCTURE
+
+Create a scalable, modular folder structure.
+
+Use this as the architectural baseline:
+
+```text
+sellmore-frontend/
+│
+├── public/
+│   ├── images/
+│   ├── icons/
+│   └── favicon.ico
+│
+├── src/
+│   │
+│   ├── app/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   ├── providers/
+│   │   └── error-boundary/
+│   │
+│   ├── routes/
+│   │   ├── index.tsx
+│   │   ├── route-paths.ts
+│   │   ├── route-config.ts
+│   │   ├── ProtectedRoute.tsx
+│   │   ├── RoleGuard.tsx
+│   │   ├── PlanGuard.tsx
+│   │   └── NotFound.tsx
+│   │
+│   ├── layouts/
+│   │   ├── AuthLayout.tsx
+│   │   ├── AdminLayout.tsx
+│   │   ├── ManagerLayout.tsx
+│   │   ├── SalesRepLayout.tsx
+│   │   └── SuperAdminLayout.tsx
+│   │
+│   ├── pages/
+│   │   ├── auth/
+│   │   ├── onboarding/
+│   │   ├── admin/
+│   │   ├── manager/
+│   │   ├── sales-rep/
+│   │   └── super-admin/
+│   │
+│   ├── features/
+│   │   ├── dashboard/
+│   │   ├── team-management/
+│   │   ├── crm/
+│   │   ├── leads/
+│   │   ├── deals/
+│   │   ├── meeting-analyse/
+│   │   ├── meeting-library/
+│   │   ├── deal-assistance/
+│   │   ├── company-intelligence/
+│   │   ├── deal-coaching/
+│   │   ├── task-intelligence/
+│   │   ├── automations/
+│   │   ├── knowledge-base/
+│   │   ├── practice/
+│   │   ├── mock-meetings/
+│   │   ├── live-assist/
+│   │   ├── analytics/
+│   │   ├── ai-chat/
+│   │   └── billing/
+│   │
+│   ├── components/
+│   │   ├── ui/
+│   │   ├── common/
+│   │   ├── navigation/
+│   │   ├── tables/
+│   │   ├── forms/
+│   │   ├── charts/
+│   │   ├── dialogs/
+│   │   └── feedback/
+│   │
+│   ├── hooks/
+│   ├── store/
+│   ├── services/
+│   │   ├── mock/
+│   │   └── frontend-services/
+│   │
+│   ├── data/
+│   ├── types/
+│   ├── constants/
+│   ├── utils/
+│   ├── styles/
+│   └── assets/
+│
+├── index.html
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+└── README.md
+```
+
+You may extend this structure when necessary.
+
+Every feature should have a logical place in the project. Do not create unnecessary duplicate folders or components.
+
+# 6. ROUTING ARCHITECTURE — VERY IMPORTANT
+
+Use **React Router DOM v7** for all application navigation.
+
+Implement proper URL-based routing.
+
+Do not create a single-page application that changes its displayed content through random conditional rendering.
+
+Do not use buttons with `href="#"` as navigation.
+
+Use:
+- BrowserRouter or the appropriate React Router configuration.
+- Routes.
+- Route.
+- Outlet.
+- Link.
+- NavLink.
+- Navigate.
+- useNavigate.
+- useParams.
+- useLocation.
+- React Router nested routing.
+
+## 6.1 Separate route groups
+
+Create separate route groups for:
+
+1. Public and authentication routes.
+2. Client Admin routes.
+3. Manager routes.
+4. Sales Representative routes.
+5. Platform Super Admin routes.
+
+Each role must have its own layout, navigation, sidebar, header, and permitted screens.
+
+## 6.2 Example URL structure
+
+These are starting examples, not a complete route inventory.
+
+### Authentication and onboarding
+
+```text
+/login
+/register
+/forgot-password
+/reset-password
+/onboarding
+/pricing
+/checkout
+```
+
+### Client Admin
+
+```text
+/app/admin/dashboard
+/app/admin/team
+/app/admin/team/:memberId
+/app/admin/crm
+/app/admin/leads
+/app/admin/deals
+/app/admin/deals/:dealId
+/app/admin/meetings
+/app/admin/meetings/:meetingId
+/app/admin/meeting-library
+/app/admin/meeting-library/:meetingId
+/app/admin/deal-assistance
+/app/admin/company-intelligence
+/app/admin/deal-coaching
+/app/admin/tasks
+/app/admin/automations
+/app/admin/knowledge-base
+/app/admin/practice
+/app/admin/mock-meetings
+/app/admin/live-assist
+/app/admin/analytics
+/app/admin/ai-chat
+/app/admin/billing
+/app/admin/settings
+```
+
+### Manager
+
+```text
+/app/manager/dashboard
+/app/manager/team
+/app/manager/team/:memberId
+/app/manager/leads
+/app/manager/deals
+/app/manager/deals/:dealId
+/app/manager/meetings
+/app/manager/meetings/:meetingId
+/app/manager/meeting-library
+/app/manager/deal-coaching
+/app/manager/tasks
+/app/manager/analytics
+/app/manager/practice
+/app/manager/mock-meetings
+/app/manager/ai-chat
+/app/manager/settings
+```
+
+### Sales Representative
+
+```text
+/app/sales/dashboard
+/app/sales/my-leads
+/app/sales/my-deals
+/app/sales/deals/:dealId
+/app/sales/meetings
+/app/sales/meetings/:meetingId
+/app/sales/meeting-library
+/app/sales/deal-assistance
+/app/sales/deal-coaching
+/app/sales/tasks
+/app/sales/practice
+/app/sales/mock-meetings
+/app/sales/live-assist
+/app/sales/ai-chat
+/app/sales/settings
+```
+
+### Platform Super Admin
+
+```text
+/platform/dashboard
+/platform/clients
+/platform/clients/:clientId
+/platform/users
+/platform/subscriptions
+/platform/plans
+/platform/credits
+/platform/integrations
+/platform/analytics
+/platform/settings
+```
+
+These routes are illustrative. The attached PRD determines the actual screens, modules, and permissions.
+
+## 6.3 Nested routing
+
+Use nested routes and dedicated layouts.
+
+Example:
+
+```tsx
+<Route element={<ProtectedRoute />}>
+  <Route path="/app/admin" element={<AdminLayout />}>
+    <Route path="dashboard" element={<AdminDashboard />} />
+    <Route path="team" element={<TeamManagement />} />
+    <Route path="deals" element={<DealsPage />} />
+    <Route path="deals/:dealId" element={<DealDetails />} />
+    <Route path="meetings" element={<MeetingsPage />} />
+    <Route path="meetings/:meetingId" element={<MeetingReport />} />
+  </Route>
+</Route>
+```
+
+Use `<Outlet />` in layouts.
+
+Keep route definitions centralized and maintainable.
+
+## 6.4 Automatic discovery and creation of additional routes
+
+**The routes listed above are NOT exhaustive.**
+
+Analyse the complete attached document and identify every additional route required.
+
+If you discover that a feature needs another screen, create the route automatically.
+
+Examples of additional routes that may be necessary:
+
+- Detail pages.
+- Create and edit pages.
+- Configuration screens.
+- History screens.
+- Reports.
+- Settings subsections.
+- Onboarding steps.
+- Workflow detail pages.
+- Lesson detail pages.
+- Meeting report subsections.
+- Individual user or team member pages.
+- Additional platform administration pages.
+
+Rules:
+
+1. Never restrict yourself to the example routes.
+2. Create every additional route required by the PRD.
+3. Implement an actual React page for every required route.
+4. Use dynamic URL parameters for individual records.
+5. Use nested routes for related screens.
+6. Use modals, drawers, or tabs instead of separate routes when appropriate.
+7. Update the central route configuration whenever a route is added.
+8. Update the relevant sidebar and navigation.
+9. Add correct breadcrumbs.
+10. Apply the correct role and plan guards.
+11. Verify every route works on direct URL entry and browser refresh.
+12. Avoid duplicate or unnecessary routes.
+
+**If you find any missing route required for a complete user journey, create it without waiting for additional instructions.**
+
+## 6.5 Protected routes and role-based guards
+
+Create reusable frontend route guards:
+
+- ProtectedRoute.
+- RoleGuard.
+- PlanGuard.
+- FeatureGuard.
+
+Use mock authentication and mock user roles.
+
+Requirements:
+
+- Unauthenticated users should be redirected to `/login`.
+- Client Admins must not access restricted Manager or Sales Representative pages.
+- Managers must only access their permitted pages.
+- Sales Representatives must only access their permitted pages.
+- Super Admin must have a separate platform interface.
+- Locked features must display the appropriate restricted or upgrade state.
+- Unauthorized routes must display an appropriate page or redirect.
+
+Remember that frontend route guards are for interface simulation, not production security.
+
+## 6.6 Complete navigation verification
+
+Every navigation item, button, card action, table action, and workflow link must navigate to the correct destination.
+
+Test:
+- Direct URL access.
+- Browser refresh.
+- Browser back and forward.
+- Nested routes.
+- Active sidebar states.
+- Breadcrumbs.
+- Dynamic route parameters.
+- Role restrictions.
+- Missing and invalid routes.
+
+Maintain a complete route inventory.
+
+# 7. FOUR DISTINCT USER EXPERIENCES
+
+Implement all four interfaces independently.
+
+### A. Client Admin Panel
+
+Create a complete admin experience with the dashboard, team management, integrations, billing, analytics, and all other permitted modules.
+
+### B. Manager Panel
+
+Create a separate manager experience with manager-specific dashboard, assigned team visibility, permitted deal and meeting views, coaching, and analytics.
+
+### C. Sales Representative Panel
+
+Create a separate sales representative experience with personal dashboard, leads, deals, meetings, deal assistance, coaching, practice, mock meetings, and other permitted features.
+
+### D. Platform Super Admin Panel
+
+Create a separate platform-level administration interface.
+
+Do not combine Super Admin with Client Admin.
+
+Follow the exact role permissions in the attached document.
+
+# 8. COMPLETE FEATURE AND SCREEN IMPLEMENTATION
+
+Implement all applicable modules from the attached PRD:
+
+- Authentication and onboarding.
+- Dashboard.
+- Team Management.
+- CRM Integration interfaces.
+- Lead and Deal Workspace.
+- Meeting Analyse.
+- Global Meeting Library.
+- Meeting Analysis Report.
+- Deal Assistance.
+- Company Intelligence.
+- Deal Coaching.
+- Task Intelligence and Follow-ups.
+- Automations and AI Workflows.
+- Knowledge Base.
+- Practice and Lessons.
+- Mock Meetings and Roleplay.
+- Live Assist.
+- Analytics.
+- Conversational Intelligence / AI Chat Assistant.
+- Billing, Credits and Payments.
+- Super Admin Panel.
+
+Do not omit screens.
+
+Preserve:
+- Product terminology.
+- Sales cue names and scoring rules.
+- Report sections.
+- Data fields.
+- Role-specific visibility.
+- Plan restrictions.
+- Workflow dependencies.
+- Module hierarchy.
+
+Do not replace detailed modules with generic placeholder dashboards.
+
+# 9. COMPLETE RESPONSIVE DESIGN — MANDATORY
+
+**The entire application must be fully responsive on all screen sizes. Responsive design is not optional and must not be limited to the dashboard or landing page.**
+
+Design, implement, and test every screen across:
+
+### Desktop
+- Large desktop: 1440px and above.
+- Standard desktop: 1280px.
+- Smaller desktop and laptops: 1024px.
+
+### Tablet
+- Landscape tablet: approximately 1024px.
+- Portrait tablet: approximately 768px.
+
+### Mobile
+- Large mobile: approximately 430px.
+- Standard mobile: approximately 390px.
+- Small mobile: approximately 320–360px.
+
+These are testing reference widths, not rigid breakpoint restrictions.
+
+## 9.1 Desktop experience
+
+- Use a professional sidebar and header layout.
+- Maintain appropriate content width.
+- Use multi-column layouts where useful.
+- Display tables and analytics at comfortable sizes.
+- Avoid excessive unused whitespace.
+- Maintain consistent spacing and alignment.
+
+## 9.2 Tablet experience
+
+- Adapt the sidebar into a collapsible or compact navigation.
+- Reorganize multi-column layouts.
+- Resize cards and charts appropriately.
+- Ensure tables remain usable.
+- Prevent content overflow.
+- Maintain readable typography and comfortable touch targets.
+
+## 9.3 Mobile experience
+
+- Convert sidebars into a mobile navigation drawer or suitable mobile navigation.
+- Use compact headers.
+- Stack cards and content sections appropriately.
+- Convert wide multi-column layouts into single-column layouts.
+- Make forms and inputs fit the available width.
+- Make dialogs and drawers mobile-friendly.
+- Use appropriate mobile table patterns, such as horizontal scrolling or responsive card layouts.
+- Ensure charts remain readable.
+- Make dropdowns and menus usable on touch screens.
+- Ensure buttons have comfortable touch targets.
+- Avoid horizontal page overflow.
+- Keep text readable without requiring zoom.
+- Make important actions accessible without excessive scrolling.
+
+## 9.4 Responsive behaviour for complex screens
+
+Pay special attention to:
+
+- Meeting Analysis Report.
+- Transcript and Cue Analysis.
+- Deal Workspace.
+- Analytics dashboards.
+- Knowledge Base.
+- Mock Meeting results.
+- Live Assist.
+- AI Chat.
+- Team Management tables.
+- Billing screens.
+- Super Admin dashboards.
+
+These screens must be redesigned appropriately for smaller screens, not simply compressed.
+
+## 9.5 Responsive implementation standards
+
+- Use Tailwind responsive breakpoints.
+- Use CSS Grid and Flexbox appropriately.
+- Use fluid widths and max-width constraints.
+- Avoid fixed widths that break on smaller devices.
+- Use responsive typography.
+- Use responsive spacing.
+- Use responsive chart containers.
+- Use appropriate overflow handling.
+- Support touch interaction.
+- Avoid hover-only interactions on mobile.
+- Ensure modals fit within the viewport.
+- Test landscape and portrait layouts.
+
+## 9.6 Responsive QA
+
+Test the complete application at the reference screen widths.
+
+For every route, verify:
+
+- No unintended horizontal scrolling.
+- No overlapping components.
+- No clipped content.
+- No broken navigation.
+- No unreadable typography.
+- No inaccessible buttons.
+- No overflowing tables.
+- No broken charts.
+- No distorted layouts.
+- No unusable modals or drawers.
+
+**Do not mark a screen complete until its desktop, tablet, and mobile layouts have been checked.**
+
+# 10. DESIGN SYSTEM AND VISUAL QUALITY
+
+Create a consistent design system for the entire application.
+
+Define reusable tokens for:
+
+- Typography.
+- Font sizes.
+- Font weights.
+- Colours.
+- Spacing.
+- Border radius.
+- Shadows.
+- Buttons.
+- Inputs.
+- Cards.
+- Tables.
+- Modals.
+- Drawers.
+- Sidebar.
+- Headers.
+- Navigation states.
+
+Design principles:
+
+- Modern B2B SaaS appearance.
+- Professional and clean visual hierarchy.
+- Appropriate information density.
+- Readable typography.
+- Consistent component styling.
+- Clear page titles and section headings.
+- Properly sized buttons.
+- High-quality data tables.
+- Well-designed charts.
+- Accessible contrast.
+- Consistent spacing.
+- Subtle animations.
+- Responsive layouts.
+
+Avoid:
+
+- Tiny typography.
+- Oversized headings.
+- Excessive whitespace.
+- Random gradients.
+- Unnecessary decorative elements.
+- Inconsistent buttons.
+- Different styles across modules.
+- Generic repeated dashboard cards.
+- Static screenshots instead of real components.
+- Poorly aligned layouts.
+
+The complete application should feel like one cohesive commercial SaaS product.
+
+# 11. FRONTEND INTERACTION REQUIREMENTS
+
+Every visible interactive element must work.
+
+Implement:
+
+- Sidebar navigation.
+- Active navigation states.
+- Dropdown menus.
+- Tabs.
+- Search.
+- Sorting.
+- Pagination.
+- Filters.
+- Date-range selection.
+- Forms.
+- Frontend validation.
+- Modals.
+- Drawers.
+- Confirmation dialogs.
+- Toast notifications.
+- Charts.
+- Table actions.
+- Create, edit, view, and delete interactions where specified.
+- File upload simulation.
+- Mock AI results.
+- Meeting report navigation.
+- Role switching.
+- Plan switching.
+- Feature lock and upgrade prompts.
+- Mock subscription and payment states.
+
+Do not create buttons that do nothing.
+
+If an operation is simulated, it must still produce a meaningful frontend response.
+
+# 12. MOCK DATA AND STATE MANAGEMENT
+
+Create realistic TypeScript mock datasets for:
+
+- Users.
+- Teams.
+- Sales Representatives.
+- Managers.
+- Leads.
+- Deals.
+- Meetings.
+- Meeting reports.
+- Sales cues.
+- Tasks.
+- Automations.
+- Knowledge Base documents.
+- Practice sessions.
+- Mock meetings.
+- Analytics.
+- Subscriptions.
+- Credits.
+- Notifications.
+
+Requirements:
+
+- Use consistent record IDs.
+- Maintain relationships between related records.
+- Use realistic sample data.
+- Avoid random inconsistent records.
+- Keep state synchronized across relevant screens.
+- Persist appropriate state in localStorage.
+- Provide resettable demo data.
+- Create frontend mock services for data operations.
+
+# 13. IMPLEMENTATION SEQUENCE
+
+Follow this implementation order.
+
+### Phase 1 — Requirement Analysis
+- Read the entire document.
+- Extract all screens.
+- Discover all routes, including additional routes.
+- Map each screen to its role.
+- Identify all interactions.
+- Identify shared components.
+- Prepare the route inventory.
+- Prepare the requirement checklist.
+
+### Phase 2 — React Foundation
+- Set up Vite, React, and TypeScript.
+- Configure Tailwind CSS.
+- Install dependencies.
+- Create project architecture.
+- Configure routing.
+- Establish design tokens.
+- Set up Zustand.
+- Create mock data and services.
+
+### Phase 3 — Layout and Navigation
+- Create all four role-specific layouts.
+- Create authentication layout.
+- Build desktop sidebar.
+- Build responsive mobile navigation.
+- Implement nested routing.
+- Implement route guards.
+- Implement breadcrumbs.
+- Implement navigation states.
+
+### Phase 4 — Complete Screen Development
+- Implement all pages.
+- Implement all modules.
+- Create reusable components.
+- Add mock datasets.
+- Add interactions.
+- Connect related screens.
+
+### Phase 5 — Responsive Refinement
+- Review all desktop layouts.
+- Review tablet layouts.
+- Review mobile layouts.
+- Fix all responsive issues.
+- Test complex screens separately.
+
+### Phase 6 — Quality Assurance
+- Test every route.
+- Test every navigation item.
+- Test dynamic routes.
+- Test direct URL access.
+- Test page refresh.
+- Test all major interactions.
+- Test role switching.
+- Test plan restrictions.
+- Test responsive behaviour.
+- Resolve TypeScript errors.
+- Resolve console errors.
+- Resolve layout issues.
+
+# 14. REQUIREMENT AND ROUTE TRACKING
+
+Maintain a complete implementation checklist.
+
+### Screen tracking
+
+| Screen | Role | UI Complete | Interactions | Responsive | Tested |
+|---|---|---|---|---|---|
+
+### Route tracking
+
+| Route | Page | React Component | Access Rules | Navigation | Tested |
+|---|---|---|---|---|---|
+
+### Requirement tracking
+
+| Requirement | Source Section | Implementation | Status |
+|---|---|---|---|
+
+Do not mark a feature complete simply because its screen exists.
+
+It must have:
+- Correct UI.
+- Correct route.
+- Correct role access.
+- Required interactions.
+- Responsive layout.
+- Successful frontend testing.
+
+# 15. FINAL DEVELOPMENT RULES
+
+1. Frontend only. No backend development.
+2. Use React 19, TypeScript, and Vite.
+3. Use React Router DOM v7 for routing.
+4. Implement proper nested and dynamic routes.
+5. Discover and create additional routes whenever required.
+6. Use reusable React components.
+7. Keep the application modular.
+8. Follow the complete attached specification.
+9. Do not skip screens.
+10. Do not create dead buttons.
+11. Do not use static images as substitutes for actual UI.
+12. Do not merge distinct user roles.
+13. Do not invent permissions or business logic.
+14. Make every screen fully responsive.
+15. Test desktop, tablet, and mobile layouts.
+16. Maintain consistent visual design across the application.
+17. Fix all major console, TypeScript, navigation, and layout errors.
+18. Keep the frontend ready for future backend integration.
+
+# 16. FINAL DELIVERABLE
+
+Deliver a complete, responsive, interactive SellMore React frontend application.
+
+I must be able to:
+
+1. Run the project locally using npm.
+2. Navigate through all four role-specific panels.
+3. Access every required screen using its URL.
+4. Refresh nested routes without errors.
+5. Switch between user roles using demo functionality.
+6. Experience free and paid plan interfaces.
+7. Interact with all major UI elements.
+8. Complete simulated customer journeys.
+9. View realistic mock data.
+10. Use the application on desktop, tablet, and mobile.
+11. Navigate through all required modules without broken links.
+12. Demonstrate the complete product without requiring a backend.
+
+Include a README with installation instructions, development commands, route overview, and demo role-switching instructions.
+
+## FINAL OBJECTIVE
+
+Build the entire SellMore frontend as a professionally engineered React SaaS application.
+
+**React + TypeScript + Vite + React Router DOM + Tailwind CSS + Zustand + Recharts.**
+
+Use proper React architecture, complete URL-based routing, nested routes, dynamic routes, role-based route guards, reusable components, realistic mock data, functional interactions, and complete responsive design.
+
+The attached document defines the product. This prompt defines how to implement it.
+
+**Do not stop after creating the dashboard. Do not stop after creating the initial routes. Do not leave mobile layouts unfinished. Do not omit any required screen. Discover missing routes yourself, implement every required module, and deliver a complete responsive frontend application.**
+Skip to main content
+Build your ideas with Gemini
+Paste November 11, 2026 - 12:00AM
+text
+
+Google Maps
+
+Create a game
+
+Three.js 3D scenes
+
+Build an Android app
+
+Build an XR Blocks app
+
+Google Drive
+
+Google Sheets
+
+Gmail
+
+Google Calendar
+
+Google Docs
+
+Google Slides
+
+Google Tasks
+
+Google Chat
+
+Google Forms
+
+Google Keep
+
+Google Meet
+
+Contacts
+
+Convert text to speech
+
+Generate music
+
+Add database and auth
+
+Add a SQL database
+
+Create & edit images
+
+Add voice conversations
+
+Animate images into video
+
+Use Google Search data
+
+Use Google Maps data
+
+Generate high-quality images
+
+Add Gemini intelligence
+
+Add a Gemini chatbot
+
+Generate video from text
+
+Control image aspect ratios
+
+Analyze images
+
+Add low-latency responses
+
+Analyze video content
+
+Transcribe audio
+
+Enable high thinking
+Explore apps built with Gemini 4 Carbon
+
+Wizard Chess 3D
+Remix
+Interactive 3D Gothic Cathedral Wizard Chess with sculpted stone pieces, cinematic melee captures, stone shatter physics, and single-player AI.
+
+
+Desk Racer
+Remix
+Miniature desk coaster time-trial racing game in Three.js
+
+
+3D GPU Fur Simulation
+Remix
+Interactive 3D fur physics and hair shading simulation for a stylized creature across studio, nature, and live AR camera environments.
+
+
+Argon Tennis
+Remix
+3D arcade tennis game with frantic racket kinematics, expressive Mii characters, webcam & phone motion controls, and Lyria 3 audio.
+

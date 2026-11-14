@@ -1,0 +1,6 @@
+{
+  "name": "SellMore — Sales Intelligence & Enablement SaaS",
+  "description": "Enterprise sales intelligence and enablement platform featuring meeting cue analysis, Deal Workspace, Live Assist, roleplay simulation, and role-based panels.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
