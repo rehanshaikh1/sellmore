@@ -107,7 +107,7 @@ export const CompanyIntelligencePage: React.FC = () => {
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Company Intelligence</h1>
             <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded font-mono uppercase">
-              Analytics Module (PRD Section 10.5)
+              Analytics Module
             </span>
           </div>
 

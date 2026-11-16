@@ -24,7 +24,7 @@ export const Pricing: React.FC = () => {
           Transparent, Scalable Intelligence Plans
         </h1>
         <p className="mt-3 text-sm text-slate-600 max-w-2xl mx-auto">
-          Start free with 10 meeting analyses or unlock Salesforce CRM context, Chrome extension Live Assist, and AI Deal Coaching.
+          Start free with 10 meeting analyses or unlock Salesforce CRM context, Chrome extension Live Assist, and AI Lead Coaching.
         </p>
 
         {/* Billing Cadence Selector */}
@@ -78,7 +78,7 @@ export const Pricing: React.FC = () => {
               </li>
               <li className="flex items-center gap-2">
                 <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Company Docs & View Predefined QA</span>
+                <span>Company Docs</span>
               </li>
               <li className="flex items-center gap-2">
                 <Check className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -206,7 +206,7 @@ export const Pricing: React.FC = () => {
               </li>
               <li className="flex items-center gap-2">
                 <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Deal Coaching Multi-Lesson Program</span>
+                <span>Lead Coaching Multi-Lesson Program</span>
               </li>
               <li className="flex items-center gap-2">
                 <Check className="w-4 h-4 text-emerald-600 shrink-0" />

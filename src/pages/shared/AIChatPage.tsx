@@ -58,7 +58,7 @@ export const AIChatPage: React.FC = () => {
       followUpChips: [
         'Draft the follow-up email to Dr. Wright and Sarah',
         'Review my earlier calls for coaching insights',
-        'Which deals are at risk this quarter?'
+        'Which leads are at risk this quarter?'
       ],
       sources: [
         {
@@ -112,7 +112,7 @@ export const AIChatPage: React.FC = () => {
         thought = 'Synthesized draft email addressing both technical urgency (3 weeks) and procurement surcharge objections.';
       } else if (textToSubmit.toLowerCase().includes('risk')) {
         responseText = `Top 2 Pipeline Risks Detected:\n1. AeroDynamics UK ($185,000): CFO Sam Patel has attended only 1 of 4 calls. High budget gatekeeper risk.\n2. BioMedix Orthopedics ($96,000): Swiss competitor Vanguard Precision offered a 15% discount. Cleanroom audit unconfirmed.`;
-        thought = 'Evaluated deal velocity, MEDDPICC economic buyer engagement, and competitor mentions.';
+        thought = 'Evaluated lead velocity, MEDDPICC economic buyer engagement, and competitor mentions.';
       } else {
         responseText = `Based on your recent calls, you excel at discovery and technical capability validation. Your primary growth area is closing the loop on economic buyers (CFOs) earlier in the cycle.`;
         thought = 'Benchmarked conversation metrics against team averages.';
@@ -126,7 +126,7 @@ export const AIChatPage: React.FC = () => {
         thoughtProcess: thought,
         sources,
         followUpChips: [
-          'Which deals are at risk this quarter?',
+          'Which leads are at risk this quarter?',
           'Ask about competitor pricing benchmarks'
         ]
       };
@@ -292,7 +292,7 @@ export const AIChatPage: React.FC = () => {
       {/* Mention helper menu */}
       {showMentionMenu && (
         <div className="bg-white border border-slate-200 rounded-xl shadow-xl p-2 text-xs space-y-1 mb-2 max-w-sm">
-          <span className="text-[10px] text-slate-400 font-mono font-bold uppercase px-2">Reference Deals & Calls:</span>
+          <span className="text-[10px] text-slate-400 font-mono font-bold uppercase px-2">Reference Leads & Calls:</span>
           {deals.map(d => (
             <div
               key={d.id}
@@ -322,7 +322,7 @@ export const AIChatPage: React.FC = () => {
           <button
             type="button"
             onClick={() => setShowMentionMenu(!showMentionMenu)}
-            title="Reference Deal or Meeting with @"
+            title="Reference Lead or Meeting with @"
             className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
           >
             <AtSign className="w-4 h-4" />
@@ -339,7 +339,7 @@ export const AIChatPage: React.FC = () => {
 
           <input
             type="text"
-            placeholder="Ask anything. Use '@' to refer to deals and meetings..."
+            placeholder="Ask anything. Use '@' to refer to leads and meetings..."
             value={inputText}
             onChange={e => setInputText(e.target.value)}
             className="flex-1 py-2 text-xs text-slate-900 focus:outline-hidden placeholder:text-slate-400"

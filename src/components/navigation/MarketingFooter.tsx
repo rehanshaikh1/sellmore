@@ -79,7 +79,7 @@ export const MarketingFooter: React.FC = () => {
               </li>
               <li>
                 <Link to="/#features" className="hover:text-white transition-colors">
-                  AI Deal Doctor & Workspace
+                  AI Deal Doctor & Lead Workspace
                 </Link>
               </li>
               <li>

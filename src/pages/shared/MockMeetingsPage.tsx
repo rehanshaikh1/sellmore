@@ -57,18 +57,32 @@ const EMPTY_MOCK_MEETING: MockMeetingHistoryItem = {
   pointsToImprove: []
 };
 
+import { analysedMeetings, setupFromMeeting } from '../../lib/simulatorSource';
+import { SourceMeetingPicker } from '../../components/practice/SourceMeetingPicker';
+import { cueName } from '../../data/practiceLessons';
+
 export const MockMeetingsPage: React.FC = () => {
   const {
     currentPlan,
     mockMeetings: allMockMeetings,
     addMockMeetingRecord,
     rescoreMockMeeting,
-    currentUser
+    currentUser,
+    currentRole,
+    meetings: allMeetings,
+    deals
   } = useStore();
 
   const { scope } = useAccess();
   // Practice history follows the owning rep: rep = own, manager = assigned reps, admin = all.
   const mockMeetings = scope(allMockMeetings, m => m.representativeId);
+  const rolePrefix = currentRole === 'manager' ? 'manager' : currentRole === 'sales_rep' ? 'sales' : 'admin';
+  // A mock meeting is built from an analysed meeting, so it can only be started when there is one.
+  const sourceMeetings = analysedMeetings(scope(allMeetings, m => m.representativeId));
+  const [sourceId, setSourceId] = useState('');
+  const source = sourceMeetings.find(m => m.id === sourceId);
+  const setup = source ? setupFromMeeting(source, deals) : undefined;
+  const canStart = sourceMeetings.length > 0;
   const isFree = currentPlan === 'free';
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
@@ -105,12 +119,20 @@ export const MockMeetingsPage: React.FC = () => {
   const [buyerPersona, setBuyerPersona] = useState('VP of Engineering at CodePilot');
   const [buyerName, setBuyerName] = useState('Michael Thompson');
 
+  useEffect(() => {
+    if (!setup) return;
+    setDomain(setup.account);
+    setRoleplayType(setup.roleplayType);
+    setBuyerPersona(setup.buyerRole);
+    setBuyerName(setup.buyerName);
+  }, [sourceId]);
+
   const [conversationLine, setConversationLine] = useState(0);
   const [conversationPlaying, setConversationPlaying] = useState(false);
 
   const demoConversation = [
     { speaker: 'buyer', text: `Hello, this is ${buyerName}. Who am I speaking with today?` },
-    { speaker: 'rep', text: `Hi Michael, this is ${currentUser.name} from Apex Precision. Thanks for taking my call. Do you have 30 seconds for me to explain why I reached out?` },
+    { speaker: 'rep', text: `Hi ${buyerName.split(' ')[0]}, this is ${currentUser.name} from Apex Precision. Thanks for taking my call. Do you have 30 seconds for me to explain why I reached out?` },
     { speaker: 'buyer', text: `I have a minute. What is this regarding? We already work with a couple of machining suppliers.` },
     { speaker: 'rep', text: `Absolutely, and I am not suggesting you replace a supplier. We help aerospace engineering teams reduce 5-axis titanium machining bottlenecks when capacity or tight tolerances become difficult to manage.` },
     { speaker: 'buyer', text: `That is interesting, but delivery reliability has been a problem for us. How would you make sure your team can meet our production schedule?` },
@@ -118,7 +140,7 @@ export const MockMeetingsPage: React.FC = () => {
     { speaker: 'buyer', text: `Mostly machining capacity and quality approval. We cannot afford parts failing inspection or arriving late.` },
     { speaker: 'rep', text: `Understood. We can review the drawings, tolerance requirements and expected volumes with your engineering team, then confirm capacity and inspection checkpoints before quoting. Would a short technical review next week make sense?` },
     { speaker: 'buyer', text: `Yes, send me the information you need and a couple of available times. I can bring our manufacturing lead into that discussion.` },
-    { speaker: 'rep', text: `Perfect. I will send a short checklist and two time options. Thanks, Michael. I appreciate your time.` }
+    { speaker: 'rep', text: `Perfect. I will send a short checklist and two time options. Thanks, ${buyerName.split(' ')[0]}. I appreciate your time.` }
   ];
 
   // Simulation in-flight state
@@ -168,14 +190,17 @@ export const MockMeetingsPage: React.FC = () => {
       roleplayType,
       domain,
       score: 78,
-      summary: `AI Roleplay completed with ${buyerName} (${buyerPersona}). Rep introduced 5-axis capability, but missed the permission-based opening window.`,
+      summary: `AI Roleplay completed with ${buyerName} (${buyerPersona}), built from "${setup?.meetingName ?? 'an analysed meeting'}" to practise ${(setup?.focusCueIds ?? []).map(cueName).join(', ') || 'the weak points of that call'}.`,
       talkListenRatio: '42% / 58%',
       fillerWordsPerMin: 1.2,
       talkSpeedWpm: 138,
       longestMonologue: '0m 45s',
       whatWentWell: ['Smooth pacing during initial greeting.', 'Clear explanation of 5-axis tolerances.'],
       pointsToImprove: ['Address dedicated fixture surcharge before customer brings it up.'],
-      rescoreStatus: 'idle'
+      rescoreStatus: 'idle',
+      sourceMeetingId: setup?.meetingId,
+      sourceMeetingName: setup?.meetingName,
+      focusCueIds: setup?.focusCueIds
     };
 
     addMockMeetingRecord(newMock);
@@ -208,13 +233,22 @@ export const MockMeetingsPage: React.FC = () => {
           {activeTab === 'history' && (
             <button
               onClick={() => setActiveTab('configure')}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg shadow-xs flex items-center gap-1.5 transition-colors"
+              disabled={!canStart}
+              title={canStart ? undefined : 'Mock meetings are built from an analysed meeting. Analyse a meeting first.'}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 text-white font-bold text-xs rounded-lg shadow-xs flex items-center gap-1.5 transition-colors"
             >
               <Play className="w-3.5 h-3.5 fill-current" /> Start New Roleplay
             </button>
           )}
         </div>
       </div>
+
+      {!canStart && activeTab === 'history' && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+          Mock meetings are built from an analysed meeting, so you can start one once a meeting has been analysed.{' '}
+          <Link to={`/${rolePrefix}/meetings`} className="font-semibold text-blue-700 underline">Open Meeting Library</Link>
+        </div>
+      )}
 
       {/* Free Plan Lock Notice */}
       {isFree && (
@@ -438,63 +472,14 @@ export const MockMeetingsPage: React.FC = () => {
             >
               <ArrowLeft className="w-3.5 h-3.5" /> Back to Mock Meetings
             </button>
-            <h2 className="text-base font-bold text-slate-900">Configure AI Mock Roleplay</h2>
+            <h2 className="text-base font-bold text-slate-900">New mock meeting</h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Select industry domain, call scenario type, and buyer persona difficulty. (PRD Section 10.11)
+              Built from a meeting SellMore has analysed: the buyer, the scenario and the cues to drill come from that call.
             </p>
           </div>
 
           <div className="space-y-4">
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Industry Domain</label>
-              <select
-                value={domain}
-                onChange={e => setDomain(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 bg-white"
-              >
-                <option value="Aerospace CNC Machining">Aerospace CNC Machining (5-Axis Titanium GD&T)</option>
-                <option value="Medical Robotics Devices">Medical Robotics Devices (Swiss Turning & Cleanroom)</option>
-                <option value="Automotive EV Powertrain">Automotive EV Powertrain (Extrusions & LME Index)</option>
-                <option value="Naval Bronze Machining">Naval Bronze Defense Machining (Subsea Mil-Spec)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Roleplay Call Type</label>
-              <select
-                value={roleplayType}
-                onChange={e => setRoleplayType(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 bg-white"
-              >
-                <option value="Cold Call">Cold Call (Permission-based opener drill)</option>
-                <option value="Warm Commercial Negotiation">Warm Commercial Negotiation (Surcharges & Split Delivery)</option>
-                <option value="Competitor Pushback Defense">Competitor Pushback Defense (Defeating Vanguard Precision)</option>
-                <option value="Final PO Authorization Close">Final PO Authorization Close (Locking Machine Slots)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Target Buyer Persona</label>
-              <select
-                value={buyerPersona}
-                onChange={e => setBuyerPersona(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 bg-white"
-              >
-                <option value="VP of Engineering at CodePilot">Michael Thompson (VP of Engineering at CodePilot - High Standards)</option>
-                <option value="VP of Procurement (Skeptical on Surcharges)">Sarah Jenkins (VP of Procurement - Capex sensitive)</option>
-                <option value="Chief Airframe Engineer (Strict on GD&T)">Dr. Thomas Wright (Chief Airframe Engineer - Precision focus)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">AI Buyer Display Name</label>
-              <input
-                type="text"
-                value={buyerName}
-                onChange={e => setBuyerName(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900"
-              />
-            </div>
+            <SourceMeetingPicker meetings={sourceMeetings} value={sourceId} onChange={setSourceId} setup={setup} rolePrefix={rolePrefix} builds="mock meeting" />
 
             <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
               <button
@@ -505,7 +490,8 @@ export const MockMeetingsPage: React.FC = () => {
               </button>
               <button
                 onClick={handleStartSimulation}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-xs flex items-center gap-1.5"
+                disabled={!setup}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 text-white font-bold rounded-lg shadow-xs flex items-center gap-1.5"
               >
                 <Play className="w-3.5 h-3.5 fill-current" /> Start Mock
               </button>
@@ -542,6 +528,11 @@ export const MockMeetingsPage: React.FC = () => {
                     {selectedMock.roleplayType}
                   </span>
                 </div>
+                {selectedMock.sourceMeetingId && (
+                  <div className="mt-1.5 text-[11px] text-slate-500">
+                    Built from <Link to={`/${rolePrefix}/meetings/${selectedMock.sourceMeetingId}`} className="font-medium text-blue-700 hover:underline">{selectedMock.sourceMeetingName}</Link>
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons: Share, Start New Roleplay, Rescore, More Menu */}
@@ -567,7 +558,9 @@ export const MockMeetingsPage: React.FC = () => {
 
                 <button
                   onClick={() => setActiveTab('configure')}
-                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-2xs"
+                  disabled={!canStart}
+                  title={canStart ? undefined : 'Mock meetings are built from an analysed meeting. Analyse a meeting first.'}
+                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-2xs"
                 >
                   <Play className="w-3.5 h-3.5 fill-current" /> Start New Roleplay
                 </button>
@@ -1129,7 +1122,7 @@ export const MockMeetingsPage: React.FC = () => {
               <div>
                 <h3 className="font-bold text-slate-900 text-sm">Buyer Objections and Rep Responses</h3>
                 <p className="text-slate-500 text-xs">
-                  Side-by-side analysis of buyer objections raised and how you navigated them. (PRD Section 10.11)
+                  Side-by-side analysis of buyer objections raised and how you navigated them.
                 </p>
               </div>
 

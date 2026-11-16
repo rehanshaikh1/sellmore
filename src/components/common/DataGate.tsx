@@ -6,7 +6,7 @@ import { DataKey, useStore } from '../../store/useStore';
 const KEY_LABELS: Record<DataKey, string> = {
   team: 'team members',
   meetings: 'meetings & analyses',
-  deals: 'deals & pipeline',
+  deals: 'leads & pipeline',
   automations: 'workflows',
   knowledge: 'knowledge sources',
   documents: 'company documents',
@@ -57,7 +57,7 @@ export const DataGate: React.FC<DataGateProps> = ({
           {title ? `${title} needs a Salesforce connection` : 'This feature needs a Salesforce connection'}
         </h2>
         <p className="text-sm text-slate-500 mt-2">
-          Deals and the features built on them only appear once Salesforce is connected.
+          This feature is built on Salesforce data, so it only appears once Salesforce is connected.
           {canConnect
             ? ' Connect Salesforce to unlock them.'
             : ' Ask your Client Admin to connect Salesforce.'}

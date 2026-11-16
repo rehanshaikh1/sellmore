@@ -34,7 +34,7 @@ export const computeDealRisks = (deal: DealRecord, meetings: MeetingRecord[], to
   const analysed = dealMeetings.filter(m => m.processingStatus === 'Analysed');
 
   if (dealMeetings.length === 0) {
-    risks.push('No call has been recorded for this deal yet.');
+    risks.push('No call has been recorded for this lead yet.');
   }
   if (deal.stakeholders.length > 0 && !deal.stakeholders.some(s => s.sentiment === 'Decision Maker')) {
     risks.push('No decision maker is identified on the Opportunity contact roles.');
@@ -47,7 +47,7 @@ export const computeDealRisks = (deal: DealRecord, meetings: MeetingRecord[], to
     risks.push(`Stalled in ${deal.stage} for ${stageDays} days.`);
   }
   if (deal.closeDate && new Date(`${deal.closeDate}T00:00:00Z`) < today) {
-    risks.push(`Close date ${deal.closeDate} has passed and the deal is still open.`);
+    risks.push(`Close date ${deal.closeDate} has passed and the lead is still open.`);
   }
   analysed.forEach(m => {
     (m.objections || [])

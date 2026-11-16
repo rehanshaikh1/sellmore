@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, UploadCloud, FileAudio, FileVideo, FileText, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { useNavigate } from 'react-router-dom';
@@ -14,7 +14,9 @@ export const MeetingUploadModal: React.FC<MeetingUploadModalProps> = ({
   onClose,
   preselectedDealId
 }) => {
-  const { uploadMeeting, teamMembers, deals, crmConnected, currentPlan, freeMeetingQuota, meetings, currentUser } = useStore();
+  const { uploadMeeting, teamMembers, deals, crmConnected, currentPlan, freeMeetingQuota, meetings, currentUser, platformLimits } = useStore();
+  const allowedFormats = platformLimits.formats.split(',').map(f => f.trim().toUpperCase()).filter(Boolean);
+  const sizeLabel = platformLimits.maxFileSizeMb >= 1024 ? `${+(platformLimits.maxFileSizeMb / 1024).toFixed(1)}GB` : `${platformLimits.maxFileSizeMb}MB`;
   const navigate = useNavigate();
 
   const [meetingName, setMeetingName] = useState('');
@@ -24,6 +26,11 @@ export const MeetingUploadModal: React.FC<MeetingUploadModalProps> = ({
   const [fileName, setFileName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // If the platform switches off the chosen format, fall back to one that is still allowed.
+  useEffect(() => {
+    if (allowedFormats.length && !allowedFormats.includes(format)) setFormat(allowedFormats[0] as 'MP4' | 'MP3' | 'TXT');
+  }, [platformLimits.formats]);
 
   if (!isOpen) return null;
 
@@ -41,7 +48,7 @@ export const MeetingUploadModal: React.FC<MeetingUploadModalProps> = ({
     const rep = teamMembers.find(m => m.id === selectedRepId) || currentUser;
 
     setIsSubmitting(true);
-    const result = uploadMeeting(meetingName.trim(), rep.id, rep.name, format, crmConnected && selectedDealId ? selectedDealId : undefined);
+    const result = uploadMeeting(meetingName.trim(), rep.id, rep.name, format, selectedDealId || undefined);
 
     if (!result.success) {
       setIsSubmitting(false);
@@ -131,17 +138,17 @@ export const MeetingUploadModal: React.FC<MeetingUploadModalProps> = ({
               </select>
             </div>
 
-            {crmConnected && (
+            {deals.length > 0 && (
             <div>
               <label className="block font-semibold text-slate-700 mb-1">
-                Associate with Opportunity
+                Link to a lead
               </label>
               <select
                 value={selectedDealId}
                 onChange={e => setSelectedDealId(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500 bg-white"
               >
-                <option value="">No deal linked (link it later)</option>
+                <option value="">No lead linked (link it later)</option>
                 {deals.filter(d => d.stage !== 'Closed Won' && d.stage !== 'Closed Lost').map(d => (
                   <option key={d.id} value={d.id}>{d.name}</option>
                 ))}
@@ -156,6 +163,7 @@ export const MeetingUploadModal: React.FC<MeetingUploadModalProps> = ({
               Source Format & Recording File <span className="text-rose-500">*</span>
             </label>
             <div className="flex gap-2 mb-2">
+              {allowedFormats.includes('MP4') && (
               <button
                 type="button"
                 onClick={() => setFormat('MP4')}
@@ -165,6 +173,8 @@ export const MeetingUploadModal: React.FC<MeetingUploadModalProps> = ({
               >
                 <FileVideo className="w-3.5 h-3.5" /> MP4 Video
               </button>
+              )}
+              {allowedFormats.includes('MP3') && (
               <button
                 type="button"
                 onClick={() => setFormat('MP3')}
@@ -174,6 +184,8 @@ export const MeetingUploadModal: React.FC<MeetingUploadModalProps> = ({
               >
                 <FileAudio className="w-3.5 h-3.5" /> MP3 Audio
               </button>
+              )}
+              {allowedFormats.includes('TXT') && (
               <button
                 type="button"
                 onClick={() => setFormat('TXT')}
@@ -183,6 +195,7 @@ export const MeetingUploadModal: React.FC<MeetingUploadModalProps> = ({
               >
                 <FileText className="w-3.5 h-3.5" /> Text Transcript
               </button>
+              )}
             </div>
 
             <div 
@@ -198,7 +211,7 @@ export const MeetingUploadModal: React.FC<MeetingUploadModalProps> = ({
               ) : (
                 <>
                   <div className="font-semibold text-slate-800">Click to select {format} file</div>
-                  <div className="text-[11px] text-slate-500 mt-0.5">Supports high-fidelity audio & video streams up to 2GB</div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">Supports high-fidelity audio & video streams up to {sizeLabel} and {platformLimits.maxDurationMin} minutes</div>
                 </>
               )}
             </div>

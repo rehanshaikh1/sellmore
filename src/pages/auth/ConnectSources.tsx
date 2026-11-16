@@ -60,9 +60,9 @@ export const ConnectSources: React.FC = () => {
             Where do your sales calls live?
           </h1>
           <p className="text-sm text-slate-500 mt-2 max-w-xl mx-auto">
-            Connect a source so SellMore has something to work with. Connect a CRM to unlock deals,
-            and deal coaching, Google Drive to import recordings, or both. You can skip this
-            and upload meetings manually.
+            Connect a source so SellMore has something to work with. Connect Salesforce to bring in
+            leads from your Opportunities, Google Drive to import recordings, or both. Leads and coaching
+            work without either: you can skip this, upload meetings manually and create leads from them.
           </p>
         </div>
 
@@ -81,7 +81,7 @@ export const ConnectSources: React.FC = () => {
             </div>
             <h2 className="font-bold text-slate-900 mt-4">Connect CRM (Salesforce)</h2>
             <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
-              Unlocks Deal Workspace, Deal Assistance, Deal Coaching and Company Intelligence.
+              Brings in leads from your Opportunities and unlocks Company Intelligence.
               Read-only access.
             </p>
             {crmConnected && <p className="text-[11px] text-slate-400 mt-3 truncate">{crmOrgName}</p>}
@@ -167,7 +167,7 @@ export const ConnectSources: React.FC = () => {
         </div>
         {!anyConnected && (
           <p className="text-center text-[11px] text-slate-400 mt-3">
-            Without Salesforce, deal features stay hidden. You can connect later from Integrations.
+            Without Salesforce you can still create leads from your meetings. Connect later from Integrations.
           </p>
         )}
         {currentRole !== 'client_admin' && (

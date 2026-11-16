@@ -71,7 +71,7 @@ export const AutomationsPage: React.FC = () => {
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Build repeatable trigger &rarr; condition &rarr; prompt &rarr; action workflows across calls, CRM context, and follow-up emails. (PRD Section 10.8)
+            Build repeatable trigger &rarr; condition &rarr; prompt &rarr; action workflows across calls, CRM context, and follow-up emails.
           </p>
         </div>
 

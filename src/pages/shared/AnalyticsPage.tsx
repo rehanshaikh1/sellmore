@@ -156,12 +156,12 @@ export const AnalyticsPage: React.FC = () => {
       ['Summary', 'Analysed meetings', analysedMeetings.length],
       ['Summary', 'Average analysis score (%)', averageScore],
       ['Summary', 'Deals', filtered.deals.length],
-      ['Summary', 'Open deals', openDeals],
+      ['Summary', 'Open leads', openDeals],
       ['Summary', 'Pipeline value', pipelineValue],
-      ['Summary', 'Closed won deals', wonDeals],
-      ['Summary', 'Closed lost deals', lostDeals],
+      ['Summary', 'Closed won leads', wonDeals],
+      ['Summary', 'Closed lost leads', lostDeals],
       ['Summary', 'Credits consumed', consumedCredits],
-      ...repPerformance.map(r => ['Representative', r.name, `Meetings: ${r.meetings}; Avg score: ${r.avgScore}%; Deals: ${r.deals}; Won: ${r.won}`])
+      ...repPerformance.map(r => ['Representative', r.name, `Meetings: ${r.meetings}; Avg score: ${r.avgScore}%; Leads: ${r.deals}; Won: ${r.won}`])
     ];
     const csv = rows.map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -210,7 +210,7 @@ export const AnalyticsPage: React.FC = () => {
       <div className="flex flex-wrap items-center gap-2">
         <div className="mr-2 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Filter className="h-3.5 w-3.5" /> Filters</div>
         {ownerOptions.length > 0 && <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"><option value="all">All visible representatives</option>{ownerOptions.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}</select>}
-        <select value={dealStageFilter} onChange={e => setDealStageFilter(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"><option value="all">All deal stages</option>{Array.from(new Set(scoped.deals.map(d => String(d.stage ?? 'Unstaged')))).map(stage => <option key={stage} value={stage}>{stage}</option>)}</select>
+        <select value={dealStageFilter} onChange={e => setDealStageFilter(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"><option value="all">All lead stages</option>{Array.from(new Set(scoped.deals.map(d => String(d.stage ?? 'Unstaged')))).map(stage => <option key={stage} value={stage}>{stage}</option>)}</select>
         <span className="text-xs text-slate-500">{filtered.meetings.length} meetings · {filtered.deals.length} deals</span>
       </div>
 
@@ -220,15 +220,15 @@ export const AnalyticsPage: React.FC = () => {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Stat label="Meetings in period" value={formatNumber(filtered.meetings.length)} detail={`${analysedMeetings.length} successfully analysed`} icon={Video} />
           <Stat label="Average analysis score" value={scores.length ? `${averageScore}%` : '—'} detail={`${scores.length} scored meetings · analysed only`} icon={Target} />
-          <Stat label="Open deals" value={formatNumber(openDeals)} detail={`${formatNumber(pipelineValue)} total open pipeline value`} icon={BriefcaseBusiness} />
+          <Stat label="Open leads" value={formatNumber(openDeals)} detail={`${formatNumber(pipelineValue)} total open pipeline value`} icon={BriefcaseBusiness} />
           <Stat label="Closed won" value={formatNumber(wonDeals)} detail={`${formatNumber(lostDeals)} closed lost`} icon={CheckCircle2} />
         </div>
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
           <ChartCard title="Meeting analysis trend" description="Completed meeting scores by upload date. Only records with a score are included.">
             {analysedMeetings.length ? <div className="h-64"><ResponsiveContainer width="100%" height="100%"><LineChart data={analysedMeetings.slice().reverse().map(m => ({ meeting: String(m.name ?? 'Meeting').slice(0, 16), score: asNumber(m.overallScorePercent) }))}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="meeting" tick={{ fontSize: 10 }} /><YAxis domain={[0, 100]} tick={{ fontSize: 11 }} /><Tooltip /><Line type="monotone" dataKey="score" name="Score (%)" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 3 }} /></LineChart></ResponsiveContainer></div> : <EmptyChart message="No completed meeting scores are available for this period." />}
           </ChartCard>
-          <ChartCard title="Deal pipeline by stage" description="Count of visible deals in each current stage.">
-            {stageData.length ? <div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={stageData}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="stage" tick={{ fontSize: 10 }} /><YAxis allowDecimals={false} /><Tooltip /><Bar dataKey="count" name="Deals" fill="#0d9488" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div> : <EmptyChart message="No deals are available in this role's scope." />}
+          <ChartCard title="Lead pipeline by stage" description="Count of visible leads in each current stage.">
+            {stageData.length ? <div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={stageData}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="stage" tick={{ fontSize: 10 }} /><YAxis allowDecimals={false} /><Tooltip /><Bar dataKey="count" name="Deals" fill="#0d9488" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div> : <EmptyChart message="No leads are available in this role's scope." />}
           </ChartCard>
         </div>
       </>}
@@ -241,9 +241,9 @@ export const AnalyticsPage: React.FC = () => {
       </>}
 
       {activeReport === 'sales' && <>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Total deals" value={filtered.deals.length} detail="Deals in selected stage filter" icon={BriefcaseBusiness} /><Stat label="Won deals" value={wonDeals} detail="Current stage contains Won" icon={TrendingUp} /><Stat label="Open pipeline" value={formatNumber(pipelineValue)} detail="Sum of available deal amounts" icon={Coins} /><Stat label="Closed won / lost" value={`${wonDeals} / ${lostDeals}`} detail="Deals in the selected scope" icon={CheckCircle2} /></div>
-        {(currentRole === 'client_admin' || currentRole === 'manager' || currentRole === 'super_admin') && <ChartCard title="Representative performance" description="Meeting volume, average analysed score and deal outcomes for representatives in the current scope.">
-          {repPerformance.length ? <div className="overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm"><thead className="border-b border-slate-200 text-xs uppercase text-slate-500"><tr><th className="py-3 pr-4">Representative</th><th className="py-3 pr-4">Meetings</th><th className="py-3 pr-4">Avg. score</th><th className="py-3 pr-4">Deals</th><th className="py-3">Won</th></tr></thead><tbody className="divide-y divide-slate-100">{repPerformance.map(r => <tr key={String(r.id)}><td className="py-3 pr-4 font-medium text-slate-800">{r.name}</td><td className="py-3 pr-4">{r.meetings}</td><td className="py-3 pr-4">{r.avgScore ? `${r.avgScore}%` : '—'}</td><td className="py-3 pr-4">{r.deals}</td><td className="py-3">{r.won}</td></tr>)}</tbody></table></div> : <EmptyChart message="No representative-level records are available for this scope." />}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Total leads" value={filtered.deals.length} detail="Leads in selected stage filter" icon={BriefcaseBusiness} /><Stat label="Won leads" value={wonDeals} detail="Current stage contains Won" icon={TrendingUp} /><Stat label="Open pipeline" value={formatNumber(pipelineValue)} detail="Sum of available lead amounts" icon={Coins} /><Stat label="Closed won / lost" value={`${wonDeals} / ${lostDeals}`} detail="Leads in the selected scope" icon={CheckCircle2} /></div>
+        {(currentRole === 'client_admin' || currentRole === 'manager' || currentRole === 'super_admin') && <ChartCard title="Representative performance" description="Meeting volume, average analysed score and lead outcomes for representatives in the current scope.">
+          {repPerformance.length ? <div className="overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm"><thead className="border-b border-slate-200 text-xs uppercase text-slate-500"><tr><th className="py-3 pr-4">Representative</th><th className="py-3 pr-4">Meetings</th><th className="py-3 pr-4">Avg. score</th><th className="py-3 pr-4">Leads</th><th className="py-3">Won</th></tr></thead><tbody className="divide-y divide-slate-100">{repPerformance.map(r => <tr key={String(r.id)}><td className="py-3 pr-4 font-medium text-slate-800">{r.name}</td><td className="py-3 pr-4">{r.meetings}</td><td className="py-3 pr-4">{r.avgScore ? `${r.avgScore}%` : '—'}</td><td className="py-3 pr-4">{r.deals}</td><td className="py-3">{r.won}</td></tr>)}</tbody></table></div> : <EmptyChart message="No representative-level records are available for this scope." />}
         </ChartCard>}
         <ChartCard title="Mock meeting & practice activity" description="Mock meeting sessions recorded in the selected period.">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><div className="rounded-lg bg-slate-50 p-4"><p className="text-xs text-slate-500">Sessions</p><p className="mt-1 text-2xl font-bold text-slate-900">{filtered.mocks.length}</p></div><div className="rounded-lg bg-slate-50 p-4"><p className="text-xs text-slate-500">Average score</p><p className="mt-1 text-2xl font-bold text-slate-900">{filtered.mocks.length ? `${Math.round(filtered.mocks.reduce((s, m) => s + asNumber(m.score), 0) / filtered.mocks.length)}%` : '—'}</p></div></div>

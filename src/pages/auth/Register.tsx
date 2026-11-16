@@ -210,7 +210,7 @@ export const Register: React.FC = () => {
                   className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 />
                 <span className="text-slate-600 text-xs">
-                  I accept the <a href="#terms" className="text-blue-600 hover:underline">Terms & Conditions</a> and understand that Free Plan is capped at 10 meeting analyses with predefined QA prompt view access.
+                  I accept the <a href="#terms" className="text-blue-600 hover:underline">Terms & Conditions</a> and understand that Free Plan is capped at 10 meeting analyses.
                 </span>
               </label>
             </div>

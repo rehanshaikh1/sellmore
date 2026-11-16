@@ -3,6 +3,7 @@ import { useStore } from '../../store/useStore';
 import { useAccess } from '../../store/useAccess';
 import { Link } from 'react-router-dom';
 import { isClosedStage } from '../../lib/deals';
+import { getRepCoaching, getRepStats } from '../../lib/repCoaching';
 import { 
   Users, 
   Briefcase, 
@@ -12,11 +13,12 @@ import {
   TrendingUp, 
   Clock, 
   ArrowUpRight,
-  ShieldAlert
+  ShieldAlert,
+  Lock
 } from 'lucide-react';
 
 export const ManagerDashboard: React.FC = () => {
-  const { deals, meetings, crmConnected } = useStore();
+  const { deals, meetings, crmConnected, practiceLessons } = useStore();
   const { assignedReps, scope } = useAccess();
 
   // Manager scope: records owned by the reps currently assigned to this manager.
@@ -45,20 +47,20 @@ export const ManagerDashboard: React.FC = () => {
         <div className="flex items-center gap-2">
           {crmConnected && (
             <Link
-              to="/manager/deal-coaching"
+              to="/manager/leads"
               className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors flex items-center gap-1.5"
             >
-              <GraduationCap className="w-3.5 h-3.5" /> Deal Coaching Mode
+              <GraduationCap className="w-3.5 h-3.5" /> Lead Coaching
             </Link>
           )}
         </div>
       </div>
 
-      {/* Permission Boundary Guardrail (PRD Section 8) */}
+      {/* Permission Boundary Guardrail */}
       <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-xs text-slate-600 flex items-start gap-2.5">
         <ShieldAlert className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
         <span>
-          <strong>Manager Permission Boundary (PRD §8):</strong> Your access is strictly scoped to your assigned sales representatives ({assignedReps.map(r => r.name).join(', ')}). Company billing, platform settings, and unassigned reps are isolated.
+          <strong>Manager Permission Boundary:</strong> Your access is strictly scoped to your assigned sales representatives ({assignedReps.map(r => r.name).join(', ')}). Company billing, platform settings, and unassigned reps are isolated.
         </span>
       </div>
 
@@ -83,7 +85,7 @@ export const ManagerDashboard: React.FC = () => {
 
         {crmConnected && (
           <Link
-            to="/manager/deals"
+            to="/manager/leads"
             className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs hover:border-blue-400 transition-all group"
           >
             <div className="flex items-center justify-between text-xs text-slate-500">
@@ -95,7 +97,7 @@ export const ManagerDashboard: React.FC = () => {
             </div>
             <div className="text-[11px] text-slate-400 mt-2 flex items-center justify-between">
               <span>{assignedDeals.length} active opportunities</span>
-              <span className="text-blue-600 group-hover:underline flex items-center">Deals <ArrowUpRight className="w-3 h-3 ml-0.5" /></span>
+              <span className="text-blue-600 group-hover:underline flex items-center">Leads <ArrowUpRight className="w-3 h-3 ml-0.5" /></span>
             </div>
           </Link>
         )}
@@ -133,7 +135,7 @@ export const ManagerDashboard: React.FC = () => {
             <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
               <tr>
                 <th className="py-3 px-4">Sales Representative</th>
-                {crmConnected && <th className="py-3 px-4">Active Deals</th>}
+                {crmConnected && <th className="py-3 px-4">Active Leads</th>}
                 {crmConnected && <th className="py-3 px-4">Pipeline Value</th>}
                 <th className="py-3 px-4">Recorded Meetings</th>
                 <th className="py-3 px-4">Average Cue Score</th>
@@ -145,6 +147,8 @@ export const ManagerDashboard: React.FC = () => {
                 const repDeals = deals.filter(d => d.ownerId === rep.id);
                 const repMeetings = meetings.filter(m => m.representativeId === rep.id);
                 const repPipeline = repDeals.reduce((sum, d) => sum + d.amount, 0);
+                const coaching = getRepCoaching(rep.id, deals, practiceLessons, meetings);
+                const { averageScore } = getRepStats(rep.id, meetings);
 
                 return (
                   <tr key={rep.id} className="hover:bg-slate-50/70 transition-colors">
@@ -154,7 +158,7 @@ export const ManagerDashboard: React.FC = () => {
                     </td>
                     {crmConnected && (
                       <td className="py-3.5 px-4 font-mono font-semibold text-slate-800">
-                        {repDeals.length} deals
+                        {repDeals.length} leads
                       </td>
                     )}
                     {crmConnected && (
@@ -167,16 +171,25 @@ export const ManagerDashboard: React.FC = () => {
                     </td>
                     <td className="py-3.5 px-4 whitespace-nowrap">
                       <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded text-[11px]">
-                        79.5% Average
+                        {averageScore !== null ? `${averageScore}% Average` : '—'}
                       </span>
                     </td>
                     <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                      <Link
-                        to="/manager/deal-coaching"
-                        className="px-2.5 py-1 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 font-semibold rounded text-[11px] transition-colors"
-                      >
-                        Coach Rep
-                      </Link>
+                      {coaching.hasPlan ? (
+                        <Link
+                          to={`/manager/leads/${coaching.firstDealId}?tab=coaching`}
+                          className="px-2.5 py-1 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 font-semibold rounded text-[11px] transition-colors"
+                        >
+                          Coach {rep.name.split(' ')[0]}
+                        </Link>
+                      ) : (
+                        <span
+                          title={coaching.reason}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 text-slate-400 font-semibold rounded text-[11px] cursor-not-allowed"
+                        >
+                          <Lock className="w-3 h-3" /> Coach {rep.name.split(' ')[0]}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );

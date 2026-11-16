@@ -101,7 +101,7 @@ export const BillingPage: React.FC = () => {
                 </h2>
                 <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                   {currentPlan === 'free'
-                    ? '10 meeting analyses maximum, manual upload, predefined QA prompts view-only.'
+                    ? '10 meeting analyses maximum, manual upload.'
                     : 'Unlimited meeting analysis, Salesforce CRM integration, Live Assist extension, and 500 AI credits/mo.'
                   }
                 </p>

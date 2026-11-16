@@ -6,9 +6,9 @@ import { isClosedStage } from '../../lib/deals';
 import { MeetingRecord } from '../../types';
 
 /**
- * Shown for a call that is not linked to a deal ("No deal linked").
- * The rep either links it to a Salesforce deal they can see, or creates a draft deal
- * that lives only in SellMore until the Opportunity appears in Salesforce.
+ * Shown for a call that is not linked to a lead. The rep either links it to a lead they can see,
+ * or creates a new lead from the call. This works with or without a CRM: a lead created here lives
+ * in SellMore, and when Salesforce is connected a later sync matches it to its Opportunity.
  */
 export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting }) => {
   const { deals, crmConnected, associateMeetingToDeal, createDraftDeal } = useStore();
@@ -21,12 +21,9 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
   const [companyName, setCompanyName] = useState('');
   const [error, setError] = useState('');
 
-  // Deals only exist once Salesforce is connected. Without it, show nothing deal-related.
-  if (!crmConnected) return null;
-
   const badge = (
     <span className="inline-flex items-center px-2 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[11px] font-medium whitespace-nowrap">
-      No deal linked
+      No lead linked
     </span>
   );
 
@@ -41,7 +38,7 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
     event.preventDefault();
     if (mode === 'link') {
       if (!dealId) {
-        setError('Choose a deal to link this call to.');
+        setError('Choose a lead to link this call to.');
         return;
       }
       associateMeetingToDeal(meeting.id, dealId);
@@ -50,7 +47,7 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
     }
     const result = createDraftDeal(meeting.id, dealName, companyName);
     if (!result.success) {
-      setError(result.error || 'Could not create the draft deal.');
+      setError(result.error || 'Could not create the draft lead.');
       return;
     }
     close();
@@ -71,7 +68,7 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
           }}
           className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700 hover:underline font-semibold text-[11px] whitespace-nowrap"
         >
-          <Link2 className="w-3 h-3" /> Link to deal
+          <Link2 className="w-3 h-3" /> Link to lead
         </button>
       </span>
 
@@ -80,7 +77,7 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
           <form onSubmit={submit} className="bg-white rounded-xl w-full max-w-md shadow-xl">
             <div className="flex items-start justify-between gap-3 p-5 border-b border-slate-100">
               <div>
-                <h3 className="font-bold text-sm text-slate-900">Link this call to a deal</h3>
+                <h3 className="font-bold text-sm text-slate-900">Link this call to a lead</h3>
                 <p className="text-[11px] text-slate-500 mt-1">{meeting.name}</p>
               </div>
               <button type="button" onClick={close} aria-label="Close" className="text-slate-400 hover:text-slate-700">
@@ -95,26 +92,26 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
                   onClick={() => setMode('link')}
                   className={`px-3 py-2 rounded-lg border font-semibold ${mode === 'link' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-slate-200 text-slate-600'}`}
                 >
-                  Salesforce deal
+                  Existing lead
                 </button>
                 <button
                   type="button"
                   onClick={() => setMode('draft')}
                   className={`px-3 py-2 rounded-lg border font-semibold ${mode === 'draft' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-slate-200 text-slate-600'}`}
                 >
-                  New draft deal
+                  New lead
                 </button>
               </div>
 
               {mode === 'link' ? (
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Open deal</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Open lead</label>
                   <select
                     value={dealId}
                     onChange={e => setDealId(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900"
                   >
-                    <option value="">Select a deal</option>
+                    <option value="">Select a lead</option>
                     {openDeals.map(d => (
                       <option key={d.id} value={d.id}>
                         {d.name}{d.source === 'draft' ? ' (draft)' : ''}
@@ -122,13 +119,13 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
                     ))}
                   </select>
                   {openDeals.length === 0 && (
-                    <p className="text-[11px] text-slate-500 mt-2">You have no open deals. Create a draft deal instead.</p>
+                    <p className="text-[11px] text-slate-500 mt-2">You have no open leads. Create a draft lead instead.</p>
                   )}
                 </div>
               ) : (
                 <div className="space-y-3">
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Deal name</label>
+                    <label className="block font-semibold text-slate-700 mb-1">Lead name</label>
                     <input
                       value={dealName}
                       onChange={e => setDealName(e.target.value)}
@@ -137,7 +134,7 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Company (Salesforce account name)</label>
+                    <label className="block font-semibold text-slate-700 mb-1">Company</label>
                     <input
                       value={companyName}
                       onChange={e => setCompanyName(e.target.value)}
@@ -146,8 +143,9 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
                     />
                   </div>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
-                    A draft is saved in SellMore only and marked "Not in Salesforce yet". When an Opportunity for the same
-                    account appears in Salesforce, the next sync matches it and keeps this deal's calls.
+                    {crmConnected
+                      ? "The lead is saved in SellMore. When an Opportunity for the same account appears in Salesforce, the next sync matches it and keeps this lead's calls."
+                      : 'The lead is saved in SellMore. You can connect Salesforce later and it will be matched to its Opportunity.'}
                   </p>
                 </div>
               )}
@@ -160,7 +158,7 @@ export const LinkDealControl: React.FC<{ meeting: MeetingRecord }> = ({ meeting 
                 Cancel
               </button>
               <button type="submit" className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold">
-                {mode === 'link' ? 'Link call' : 'Create draft and link'}
+                {mode === 'link' ? 'Link call' : 'Create lead and link'}
               </button>
             </div>
           </form>

@@ -170,6 +170,31 @@ export interface CoachingLesson {
   managerFeedbackAt?: string;
 }
 
+/**
+ * A practice lesson made by a user from the cues they fell short on. It is stored as this small spec
+ * and turned into a playable conversation by lib/lessonBuilder.
+ */
+export interface LessonSpec {
+  id: string;
+  title: string;
+  cueIds: number[];
+  /** 'meeting': built from one call. 'lead': built from every analysed call on a lead. */
+  origin: 'meeting' | 'lead';
+  /** 'checklist': the user ticked the points. 'ai': taken from the suggested plan. */
+  method: 'checklist' | 'ai';
+  meetingId?: string;
+  meetingName?: string;
+  leadId?: string;
+  leadName?: string;
+  /** One line on what the lesson was built from. */
+  context: string;
+  /** The rep who practises it. */
+  ownerId: string;
+  /** Set when a manager created the lesson on behalf of the rep. */
+  assignedByName?: string;
+  createdAt: string;
+}
+
 export interface DealCoachingProgram {
   dealId: string;
   dealName: string;
@@ -239,6 +264,10 @@ export interface MockMeetingHistoryItem {
   whatWentWell: string[];
   pointsToImprove: string[];
   rescoreStatus?: 'idle' | 'processing' | 'rescored';
+  /** The analysed meeting this mock was built from. */
+  sourceMeetingId?: string;
+  sourceMeetingName?: string;
+  focusCueIds?: number[];
 }
 
 export interface CreditTransaction {
@@ -296,3 +325,48 @@ export interface EffectiveCue extends CuePrompt {
 }
 
 export type CueInput = Pick<CuePrompt, 'cueName' | 'category' | 'description' | 'instructions' | 'enabled'>;
+
+/* ---------------- Platform (super admin) ---------------- */
+
+export type TenantStatus = 'Active' | 'Suspended';
+
+/** A customer business on the platform. */
+export interface PlatformTenant {
+  id: string;
+  name: string;
+  adminName: string;
+  adminEmail: string;
+  plan: PlanTier;
+  seatsUsed: number;
+  meetingsUsed: number;
+  status: TenantStatus;
+  /** Free text, "Perpetual" for the free plan. */
+  renewal: string;
+  createdAt: string;
+  notes?: string;
+}
+
+/** A commercial plan the super admin sells. `null` limits mean unlimited. */
+export interface PlatformPlan {
+  id: PlanTier;
+  name: string;
+  priceMonthly: number;
+  seats: number | null;
+  meetingQuota: number | null;
+  credits: number;
+  features: string[];
+  active: boolean;
+}
+
+export interface PlatformLimits {
+  formats: string;
+  maxFileSizeMb: number;
+  maxDurationMin: number;
+  inviteExpiryHours: number;
+}
+
+export interface PlatformActivity {
+  id: string;
+  at: string;
+  text: string;
+}

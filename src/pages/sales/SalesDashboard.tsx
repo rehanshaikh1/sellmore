@@ -22,7 +22,7 @@ export const SalesDashboard: React.FC = () => {
   const { deals, meetings, currentUser, currentPlan, crmConnected } = useStore();
   const [isUploadOpen, setIsUploadOpen] = useState(false);
 
-  // Scoped to personal records only per PRD Section 9
+  // Scoped to personal records only
   const myDeals = deals.filter(d => d.ownerId === currentUser.id && !isClosedStage(d.stage));
   const myMeetings = meetings.filter(m => m.representativeId === currentUser.id);
   const scoredMeetings = myMeetings.filter(m => typeof m.overallScorePercent === 'number');
@@ -78,17 +78,17 @@ export const SalesDashboard: React.FC = () => {
               <Clock className="w-3.5 h-3.5" />
               {hasScheduledCall
                 ? upcomingMeeting.nextMeetingDate
-                : 'No call date scheduled · You can still prepare for this deal'}
+                : 'No call date scheduled · You can still prepare for this lead'}
             </div>
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
             <Link
-              to={`/sales/deals/${upcomingMeeting.id}?tab=prep`}
+              to={`/sales/leads/${upcomingMeeting.id}?tab=prep`}
               className="px-4 py-2.5 bg-blue-500 hover:bg-blue-400 text-white font-bold text-xs rounded-xl shadow-md transition-colors flex items-center gap-2"
             >
               <PlayCircle className="w-4 h-4 fill-current" />
-              <span>{hasScheduledCall ? 'Launch Prep Call Module' : 'Prepare for This Deal'}</span>
+              <span>{hasScheduledCall ? 'Launch Prep Call Module' : 'Prepare for This Lead'}</span>
             </Link>
           </div>
         </div>
@@ -98,11 +98,11 @@ export const SalesDashboard: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {crmConnected && (
           <Link
-            to="/sales/my-deals"
+            to="/sales/leads"
             className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs hover:border-blue-400 transition-all group"
           >
             <div className="flex items-center justify-between text-xs text-slate-500">
-              <span className="font-medium">My Active Deals</span>
+              <span className="font-medium">My Active Leads</span>
               <Briefcase className="w-4 h-4 text-slate-400 group-hover:text-blue-600" />
             </div>
             <div className="text-2xl font-bold font-mono text-slate-900 mt-3">
@@ -186,7 +186,7 @@ export const SalesDashboard: React.FC = () => {
 
         {crmConnected && (
           <Link
-            to="/sales/deal-coaching"
+            to="/sales/leads"
             className="p-4 bg-white rounded-xl border border-slate-200 hover:border-slate-300 transition-all flex items-start gap-3 shadow-2xs group"
           >
             <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-colors shrink-0">
@@ -194,7 +194,7 @@ export const SalesDashboard: React.FC = () => {
             </div>
             <div>
               <h3 className="font-bold text-slate-900 text-xs group-hover:text-emerald-600 transition-colors">
-                Tailored Deal Coaching
+                Tailored Lead Coaching
               </h3>
               <p className="text-[11px] text-slate-500 mt-1">
                 Step through a coaching curriculum for your selected sales opportunity.

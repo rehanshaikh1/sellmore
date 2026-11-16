@@ -2,10 +2,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, Link, useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/useStore';
+import { useTheme } from '../../lib/theme';
 
 import {
   Menu,
   Bell,
+  Moon,
+  Sun,
   ChevronRight,
   CreditCard,
   Plus,
@@ -30,6 +33,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { isDark, toggle: toggleTheme } = useTheme();
 
   const {
     currentUser,
@@ -267,6 +271,18 @@ export const TopBar: React.FC<TopBarProps> = ({
           </button>
         )}
 
+        {/* NIGHT MODE */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="p-2.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
+          title={isDark ? 'Switch to day mode' : 'Switch to night mode'}
+          aria-label={isDark ? 'Switch to day mode' : 'Switch to night mode'}
+          aria-pressed={isDark}
+        >
+          {isDark ? <Sun className="w-[19px] h-[19px]" /> : <Moon className="w-[19px] h-[19px]" />}
+        </button>
+
         {/* NOTIFICATIONS */}
         <div className="relative" ref={notificationsRef}>
           <button
@@ -338,7 +354,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   </div>
 
                   <div className="text-xs text-slate-500 mt-1 leading-relaxed">
-                    A call was imported from Salesforce, analysed and linked to its deal.
+                    A call was imported from Salesforce, analysed and linked to its lead.
                   </div>
 
                   <div className="text-[11px] text-slate-400 mt-2">

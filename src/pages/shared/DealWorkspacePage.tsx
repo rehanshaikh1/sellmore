@@ -4,6 +4,9 @@ import { useStore } from '../../store/useStore';
 import { useAccess } from '../../store/useAccess';
 import { computeDealRisks } from '../../lib/deals';
 import { SOURCE_LABELS } from '../../components/common/SourceBadge';
+import { newSpecId } from '../../lib/lessonBuilder';
+import { LeadAssistantPanel } from '../../components/leads/LeadAssistantPanel';
+import { LeadCoachingPanel } from '../../components/leads/LeadCoachingPanel';
 import {
   ArrowLeft, AlertTriangle, CheckCircle2, Clock, FileText, Play,
   Sparkles, Users, Target, MessageSquare, Send, RotateCcw,
@@ -11,7 +14,11 @@ import {
   Check, Circle, Award, BookOpen, Briefcase, Calendar, Building2
 } from 'lucide-react';
 
-type WorkspaceTab = 'overview' | 'timeline' | 'stakeholders' | 'risks' | 'prep';
+type WorkspaceTab = 'overview' | 'timeline' | 'stakeholders' | 'risks' | 'prep' | 'assistant' | 'coaching';
+const TAB_LABELS: [WorkspaceTab, string][] = [
+  ['overview', 'Overview'], ['timeline', 'Timeline'], ['stakeholders', 'Stakeholders'], ['risks', 'Risks & next steps'],
+  ['assistant', 'Ask AI'], ['coaching', 'Coaching'], ['prep', 'Call prep']
+];
 type PrepStage = 'briefing' | 'call' | 'results';
 type ChatMessage = {
   id: string;
@@ -105,7 +112,7 @@ export const DealWorkspacePage: React.FC = () => {
   const { dealId } = useParams<{ dealId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { deals, meetings, currentRole, currentUser } = useStore();
+  const { deals, meetings, currentRole, currentUser, crmConnected, addPracticeLessons } = useStore();
 
   const rolePrefix =
     currentRole === 'manager'
@@ -142,7 +149,7 @@ export const DealWorkspacePage: React.FC = () => {
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    const valid: WorkspaceTab[] = ['overview', 'timeline', 'stakeholders', 'risks', 'prep'];
+    const valid: WorkspaceTab[] = ['overview', 'timeline', 'stakeholders', 'risks', 'prep', 'assistant', 'coaching'];
     setActiveTab(valid.includes(tab as WorkspaceTab) ? tab as WorkspaceTab : 'overview');
   }, [searchParams]);
 
@@ -203,7 +210,7 @@ export const DealWorkspacePage: React.FC = () => {
       'Understand who is involved in the decision and what each person needs.',
       'End with a clear next step, owner, and expected timeline.'
     ];
-    if (risks.length) items[2] = `Address the known deal risk: ${risks[0]}`;
+    if (risks.length) items[2] = `Address the known lead risk: ${risks[0]}`;
     if (recommendedSteps.length) items[4] = `Confirm the next action: ${recommendedSteps[0]}`;
     return items;
   }, [deal?.companyName, risks, recommendedSteps]);
@@ -247,6 +254,23 @@ export const DealWorkspacePage: React.FC = () => {
       try { localStorage.setItem(reviewKey, JSON.stringify(next)); } catch { }
       return next;
     });
+  };
+
+  const SKILL_CUES: Record<string, number[]> = {
+    'Discovery & questioning': [2, 3], 'Active listening': [4], 'Business value': [7], 'Objection handling': [9], 'Closing & next steps': [11, 12]
+  };
+  // Turn the weakest skill of this mock call into a practice lesson for this lead.
+  const createSkillLesson = () => {
+    if (!deal) return;
+    const weakest = [...results].sort((a, b) => a.score - b.score)[0]?.label || 'Discovery & questioning';
+    const id = newSpecId();
+    addPracticeLessons([{
+      id, title: `${deal.companyName}: ${weakest}`, cueIds: SKILL_CUES[weakest] ?? [2, 3], origin: 'lead', method: 'ai',
+      leadId: deal.id, leadName: deal.name,
+      context: `Built from your mock call on ${deal.name}: ${weakest} scored lowest.`,
+      ownerId: deal.ownerId, createdAt: new Date().toISOString().slice(0, 10)
+    }]);
+    navigate(`/${rolePrefix}/practice?lesson=${id}`);
   };
 
   const startCall = () => {
@@ -320,11 +344,11 @@ export const DealWorkspacePage: React.FC = () => {
     return (
       <div className="max-w-3xl mx-auto py-20 text-center">
         <div className="mx-auto w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center"><AlertTriangle /></div>
-        <h2 className="mt-4 text-lg font-bold text-slate-900">Deal Not Available</h2>
+        <h2 className="mt-4 text-lg font-bold text-slate-900">Lead Not Available</h2>
         <p className="mt-1 text-sm text-slate-500">
-          This deal is not in your permitted deal list, may have been removed, or your team assignment may not be configured.
+          This lead is not in your permitted lead list, may have been removed, or your team assignment may not be configured.
         </p>
-        <Link to={`/${rolePrefix}/deals`} className="inline-flex mt-4 text-sm text-blue-600 font-semibold">Back to Deal Dashboard</Link>
+        <Link to={`/${rolePrefix}/leads`} className="inline-flex mt-4 text-sm text-blue-600 font-semibold">Back to Lead Dashboard</Link>
       </div>
     );
   }
@@ -336,10 +360,10 @@ export const DealWorkspacePage: React.FC = () => {
   return (
     <div className="max-w-7xl mx-auto space-y-5 pb-10">
       <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-        <Link to={`/${rolePrefix}/deals`} className="inline-flex items-center gap-2 text-xs font-semibold text-slate-500 hover:text-slate-900">
-          <ArrowLeft className="w-4 h-4" /> Back to Deal Dashboard
+        <Link to={`/${rolePrefix}/leads`} className="inline-flex items-center gap-2 text-xs font-semibold text-slate-500 hover:text-slate-900">
+          <ArrowLeft className="w-4 h-4" /> Back to Lead Dashboard
         </Link>
-        <span className="text-[11px] text-slate-400 font-mono">{deal.crmId ? `Opportunity ID: ${deal.crmId}` : `Deal ID: ${deal.id}`}</span>
+        <span className="text-[11px] text-slate-400 font-mono">{deal.crmId ? `Opportunity ID: ${deal.crmId}` : `Lead ID: ${deal.id}`}</span>
       </div>
 
       <section className="bg-white border border-slate-200 rounded-xl p-5 md:p-6">
@@ -348,7 +372,7 @@ export const DealWorkspacePage: React.FC = () => {
             <div className="flex items-center gap-2 flex-wrap">
               <span className="px-2 py-1 rounded bg-slate-100 text-slate-700 text-[11px] font-semibold">{deal.stage}</span>
               {deal.source === 'draft' ? (
-                <span className="px-2 py-1 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[11px] font-semibold">Draft · not in Salesforce yet</span>
+                <span className="px-2 py-1 rounded border border-slate-200 bg-slate-50 text-slate-600 text-[11px] font-semibold">SellMore lead{crmConnected ? ' · not in Salesforce yet' : ''}</span>
               ) : (
                 <span className="px-2 py-1 rounded border border-sky-200 bg-sky-50 text-sky-700 text-[11px] font-semibold">
                   Salesforce{deal.rawStage && deal.rawStage !== deal.stage ? ` · ${deal.rawStage}` : ''}
@@ -360,17 +384,32 @@ export const DealWorkspacePage: React.FC = () => {
             <p className="text-xs text-slate-500 mt-1">{deal.companyName} · Owner: {deal.ownerName} · Last interaction: {deal.lastMeetingDate || 'Not available'}</p>
           </div>
           <div className="flex items-center gap-4">
-            <div><p className="text-[10px] uppercase tracking-wide text-slate-400">Opportunity value</p><p className="text-xl font-bold text-slate-900">${Number(deal.amount || 0).toLocaleString()}</p><p className="text-[10px] text-slate-500">Close: {deal.closeDate || 'Not set'}</p></div>
+            <div><p className="text-[10px] uppercase tracking-wide text-slate-400">{deal.source === 'draft' ? 'Lead value' : 'Opportunity value'}</p><p className="text-xl font-bold text-slate-900">${Number(deal.amount || 0).toLocaleString()}</p><p className="text-[10px] text-slate-500">Close: {deal.closeDate || 'Not set'}</p></div>
             <button onClick={() => changeTab('prep')} className="px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold inline-flex items-center gap-2"><Sparkles className="w-4 h-4" /> Prep Call</button>
           </div>
         </div>
       </section>
 
-      {activeTab !== 'prep' && (
+      <nav className="flex gap-1 overflow-x-auto border-b border-slate-200" aria-label="Lead workspace sections">
+        {TAB_LABELS.map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => changeTab(id)}
+            className={`whitespace-nowrap border-b-2 px-4 py-2.5 text-[13px] font-semibold transition-colors ${activeTab === id ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-900'}`}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === 'assistant' && <LeadAssistantPanel deal={deal} />}
+      {activeTab === 'coaching' && <LeadCoachingPanel deal={deal} rolePrefix={rolePrefix} />}
+
+      {activeTab !== 'prep' && activeTab !== 'assistant' && activeTab !== 'coaching' && (
         <section className="rounded-lg border border-slate-200 bg-white">
           <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5">
             <div>
-              <h3 className="text-[13px] font-semibold text-slate-900">Meetings held for this deal</h3>
+              <h3 className="text-[13px] font-semibold text-slate-900">Meetings held for this lead</h3>
               <p className="mt-0.5 text-xs text-slate-500">Newest first. Open a report for the full analysis.</p>
             </div>
             <span className="text-xs tabular-nums text-slate-500">
@@ -446,24 +485,20 @@ export const DealWorkspacePage: React.FC = () => {
             </div>
           ) : (
             <p className="px-5 py-8 text-sm text-slate-500">
-              Waiting for the first call. When a recording on this Opportunity is imported from Salesforce, or you link a call from the Meeting Library, it appears here and starts the risks and coaching.
+              Waiting for the first call. Link a call from the Meeting Library, or import one from a connected source, and it appears here and starts the risks and coaching.
             </p>
           )}
         </section>
       )}
 
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-4">
           <section className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-            <h3 className="font-bold text-sm text-slate-900">Recent Events</h3>
-            {timeline.slice(0, 5).length ? timeline.slice(0, 5).map((item: any) => <div key={item.id} className="border-t border-slate-100 pt-3"><p className="font-semibold text-xs text-slate-800">{item.title}</p><p className="text-[11px] text-slate-500 mt-1">{item.date} · {item.description}</p></div>) : <p className="text-xs text-slate-500">No timeline events available.</p>}
-          </section>
-          <section className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 lg:col-span-2">
-            <h3 className="font-bold text-sm text-slate-900">Deal Health & Coaching Focus</h3>
+            <h3 className="font-bold text-sm text-slate-900">Lead Health & Coaching Focus</h3>
             <p className="text-xs text-slate-600 leading-relaxed">{deal.name} is currently in {deal.stage}. Prepare around the buyer’s business priorities, validate outstanding risks, and agree on a measurable next step.</p>
             {risks.length > 0 && <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg"><p className="text-xs font-bold text-amber-900 flex gap-2"><AlertTriangle className="w-4 h-4" /> Attention areas</p><ul className="mt-2 space-y-1 text-xs text-amber-900">{risks.map((r, i) => <li key={i}>• {r}</li>)}</ul></div>}
             <div className="flex justify-between items-center"><h4 className="text-xs font-bold text-slate-800">Recommended next steps from the latest call</h4><button onClick={() => changeTab('risks')} className="text-xs text-blue-600">View all</button></div>
-            {recommendedSteps.length ? recommendedSteps.slice(0, 4).map((step, i) => <div key={i} className="p-3 rounded-lg border border-slate-200 text-xs text-slate-700">{step}</div>) : <p className="text-xs text-slate-500">No analysed call on this deal yet.</p>}
+            {recommendedSteps.length ? recommendedSteps.slice(0, 4).map((step, i) => <div key={i} className="p-3 rounded-lg border border-slate-200 text-xs text-slate-700">{step}</div>) : <p className="text-xs text-slate-500">No analysed call on this lead yet.</p>}
           </section>
         </div>
       )}
@@ -477,21 +512,21 @@ export const DealWorkspacePage: React.FC = () => {
 
       {activeTab === 'stakeholders' && (
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {stakeholders.length ? stakeholders.map((s: any) => <div key={s.id} className="bg-white border border-slate-200 rounded-xl p-4"><div className="flex items-start justify-between"><div><h3 className="font-bold text-sm">{s.name}</h3><p className="text-xs text-slate-500">{s.role}</p></div><span className="text-[10px] px-2 py-1 bg-slate-100 rounded">{s.sentiment || 'Unclassified'}</span></div><p className="text-[11px] text-slate-500 mt-3">Last contact: {s.lastSpoke || 'Not available'}</p><p className="text-[11px] text-slate-500">Company: {s.company || deal.companyName}</p></div>) : <div className="col-span-full bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">No stakeholders have been added to this deal.</div>}
+          {stakeholders.length ? stakeholders.map((s: any) => <div key={s.id} className="bg-white border border-slate-200 rounded-xl p-4"><div className="flex items-start justify-between"><div><h3 className="font-bold text-sm">{s.name}</h3><p className="text-xs text-slate-500">{s.role}</p></div><span className="text-[10px] px-2 py-1 bg-slate-100 rounded">{s.sentiment || 'Unclassified'}</span></div><p className="text-[11px] text-slate-500 mt-3">Last contact: {s.lastSpoke || 'Not available'}</p><p className="text-[11px] text-slate-500">Company: {s.company || deal.companyName}</p></div>) : <div className="col-span-full bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">No stakeholders have been added to this lead.</div>}
         </section>
       )}
 
       {activeTab === 'risks' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <section className="bg-white border border-slate-200 rounded-xl p-5"><h3 className="font-bold text-sm mb-3">Detected Deal Risks</h3>{risks.length ? risks.map((r, i) => <div key={i} className="p-3 mb-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">{r}</div>) : <p className="text-xs text-slate-500">No risks found for this deal.</p>}</section>
-          <section className="bg-white border border-slate-200 rounded-xl p-5"><h3 className="font-bold text-sm mb-3">Recommended Next Steps</h3>{recommendedSteps.length ? recommendedSteps.map((step, i) => <div key={i} className="p-3 mb-2 border border-slate-200 rounded-lg text-xs text-slate-700">{step}</div>) : <p className="text-xs text-slate-500">No analysed call on this deal yet.</p>}{latestAnalysed && <p className="text-[10px] text-slate-400 mt-2">From {latestAnalysed.name}</p>}</section>
+          <section className="bg-white border border-slate-200 rounded-xl p-5"><h3 className="font-bold text-sm mb-3">Detected Lead Risks</h3>{risks.length ? risks.map((r, i) => <div key={i} className="p-3 mb-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">{r}</div>) : <p className="text-xs text-slate-500">No risks found for this lead.</p>}</section>
+          <section className="bg-white border border-slate-200 rounded-xl p-5"><h3 className="font-bold text-sm mb-3">Recommended Next Steps</h3>{recommendedSteps.length ? recommendedSteps.map((step, i) => <div key={i} className="p-3 mb-2 border border-slate-200 rounded-lg text-xs text-slate-700">{step}</div>) : <p className="text-xs text-slate-500">No analysed call on this lead yet.</p>}{latestAnalysed && <p className="text-[10px] text-slate-400 mt-2">From {latestAnalysed.name}</p>}</section>
         </div>
       )}
 
       {activeTab === 'prep' && (
         <div className="space-y-5">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div><p className="text-[10px] font-bold uppercase tracking-widest text-blue-600">Deal-specific call preparation</p><h2 className="text-xl font-bold text-slate-900 mt-1">{prepStage === 'briefing' ? 'Prepare for your meeting' : prepStage === 'call' ? 'Mock buyer conversation' : 'Your performance review'}</h2><p className="text-xs text-slate-500 mt-1">{deal.name} · {deal.companyName}</p></div>
+            <div><p className="text-[10px] font-bold uppercase tracking-widest text-blue-600">Lead-specific call preparation</p><h2 className="text-xl font-bold text-slate-900 mt-1">{prepStage === 'briefing' ? 'Prepare for your meeting' : prepStage === 'call' ? 'Mock buyer conversation' : 'Your performance review'}</h2><p className="text-xs text-slate-500 mt-1">{deal.name} · {deal.companyName}</p></div>
             <div className="flex items-center gap-2 text-[11px] font-semibold">
               {(['briefing', 'call', 'results'] as PrepStage[]).map((s, i) => <React.Fragment key={s}><span className={`px-3 py-2 rounded-lg ${prepStage === s ? 'bg-blue-600 text-white' : (['briefing', 'call', 'results'].indexOf(prepStage) > i ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400')}`}>{String(i + 1).padStart(2, '0')} {s === 'briefing' ? 'Prepare' : s === 'call' ? 'Mock Call' : 'Results'}</span>{i < 2 && <ChevronRight className="w-3 h-3 text-slate-300" />}</React.Fragment>)}
             </div>
@@ -504,7 +539,7 @@ export const DealWorkspacePage: React.FC = () => {
                   <div className="flex items-center gap-2 text-blue-700"><Target className="w-4 h-4" /><h3 className="font-bold text-sm">Your meeting objective</h3></div>
                   <p className="text-sm text-slate-800 font-semibold mt-3">{objective}</p>
                   <p className="text-xs text-slate-500 mt-2">Target outcome: leave the conversation with a confirmed decision path and a specific next action.</p>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">{[['Stage', deal.stage], ['Deal value', `$${Number(deal.amount || 0).toLocaleString()}`], ['Owner', deal.ownerName], ['Close date', deal.closeDate || 'Not set']].map(([k, v]) => <div key={k} className="p-3 bg-slate-50 rounded-lg"><p className="text-[10px] text-slate-400">{k}</p><p className="text-xs font-bold text-slate-800 mt-1">{v}</p></div>)}</div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">{[['Stage', deal.stage], ['Lead value', `$${Number(deal.amount || 0).toLocaleString()}`], ['Owner', deal.ownerName], ['Close date', deal.closeDate || 'Not set']].map(([k, v]) => <div key={k} className="p-3 bg-slate-50 rounded-lg"><p className="text-[10px] text-slate-400">{k}</p><p className="text-xs font-bold text-slate-800 mt-1">{v}</p></div>)}</div>
                 </section>
 
                 <section className="bg-white border border-slate-200 rounded-xl p-5">
@@ -515,7 +550,7 @@ export const DealWorkspacePage: React.FC = () => {
 
                 <section className="bg-white border border-slate-200 rounded-xl p-5">
                   <div className="flex items-center gap-2 mb-3"><Users className="w-4 h-4 text-indigo-600" /><h3 className="font-bold text-sm">Stakeholder reminders</h3></div>
-                  {stakeholders.length ? <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{stakeholders.map((s: any, i: number) => <div key={s.id} className="p-3 bg-slate-50 rounded-lg"><div className="flex justify-between gap-2"><p className="font-bold text-xs text-slate-800">{s.name}</p><span className="text-[10px] text-slate-500">{s.sentiment || 'Stakeholder'}</span></div><p className="text-[11px] text-slate-500 mt-0.5">{s.role}</p><p className="text-[11px] text-slate-700 mt-2">{/cfo|finance|economic|decision/i.test(`${s.role} ${s.sentiment}`) ? 'Focus on ROI, budget, financial justification, and measurable business impact.' : /technical|engineer|it|security/i.test(s.role) ? 'Focus on technical fit, implementation, integrations, and risk validation.' : 'Understand this stakeholder’s priorities, concerns, influence, and required next action.'}</p></div>)}</div> : <p className="text-xs text-slate-500">No stakeholders are linked to this deal yet. Use the questions below to identify the buying committee.</p>}
+                  {stakeholders.length ? <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{stakeholders.map((s: any, i: number) => <div key={s.id} className="p-3 bg-slate-50 rounded-lg"><div className="flex justify-between gap-2"><p className="font-bold text-xs text-slate-800">{s.name}</p><span className="text-[10px] text-slate-500">{s.sentiment || 'Stakeholder'}</span></div><p className="text-[11px] text-slate-500 mt-0.5">{s.role}</p><p className="text-[11px] text-slate-700 mt-2">{/cfo|finance|economic|decision/i.test(`${s.role} ${s.sentiment}`) ? 'Focus on ROI, budget, financial justification, and measurable business impact.' : /technical|engineer|it|security/i.test(s.role) ? 'Focus on technical fit, implementation, integrations, and risk validation.' : 'Understand this stakeholder’s priorities, concerns, influence, and required next action.'}</p></div>)}</div> : <p className="text-xs text-slate-500">No stakeholders are linked to this lead yet. Use the questions below to identify the buying committee.</p>}
                 </section>
 
                 <section className="bg-white border border-slate-200 rounded-xl p-5">
@@ -525,9 +560,9 @@ export const DealWorkspacePage: React.FC = () => {
               </div>
 
               <aside className="space-y-4">
-                <section className="bg-amber-50 border border-amber-200 rounded-xl p-5"><h3 className="font-bold text-sm text-amber-900 flex gap-2"><ShieldCheck className="w-4 h-4" /> Things to avoid</h3><ul className="space-y-2 mt-3 text-xs text-amber-900"><li>• Do not offer a discount before understanding the concern.</li><li>• Do not promise timelines or capabilities you have not validated.</li><li>• Do not ignore risks already recorded on this deal.</li><li>• Do not focus on one contact while overlooking other decision-makers.</li><li>• Do not end without confirming the next action and owner.</li></ul>{risks.length > 0 && <div className="mt-3 pt-3 border-t border-amber-200"><p className="text-[10px] font-bold uppercase text-amber-800">Deal-specific risk to remember</p><p className="text-xs text-amber-900 mt-1">{risks[0]}</p></div>}</section>
+                <section className="bg-amber-50 border border-amber-200 rounded-xl p-5"><h3 className="font-bold text-sm text-amber-900 flex gap-2"><ShieldCheck className="w-4 h-4" /> Things to avoid</h3><ul className="space-y-2 mt-3 text-xs text-amber-900"><li>• Do not offer a discount before understanding the concern.</li><li>• Do not promise timelines or capabilities you have not validated.</li><li>• Do not ignore risks already recorded on this lead.</li><li>• Do not focus on one contact while overlooking other decision-makers.</li><li>• Do not end without confirming the next action and owner.</li></ul>{risks.length > 0 && <div className="mt-3 pt-3 border-t border-amber-200"><p className="text-[10px] font-bold uppercase text-amber-800">Lead-specific risk to remember</p><p className="text-xs text-amber-900 mt-1">{risks[0]}</p></div>}</section>
                 <section className="bg-white border border-slate-200 rounded-xl p-5"><h3 className="font-bold text-sm text-slate-900">Questions to ask the buyer</h3><ul className="space-y-3 mt-3 text-xs text-slate-600">{['What is the biggest concern preventing you from moving forward?', 'Who else needs to approve this decision?', 'What criteria will determine the final decision?', 'What needs to happen before we agree on the next milestone?', 'What would make this meeting a successful outcome for you?'].map((q, i) => <li key={i} className="flex gap-2"><span className="text-blue-600 font-bold">{i + 1}.</span>{q}</li>)}</ul></section>
-                <section className="bg-white border border-slate-200 rounded-xl p-5"><div className="flex items-center justify-between"><h3 className="font-bold text-sm">Personal preparation notes</h3><button onClick={saveNotes} className="text-xs text-blue-600 font-semibold inline-flex items-center gap-1"><Save className="w-3 h-3" /> Save</button></div><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={7} placeholder="Write your own reminders, buyer context, questions, or points to raise..." className="w-full mt-3 p-3 border border-slate-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 resize-y" /><div className="flex justify-between items-center mt-2"><span className="text-[10px] text-slate-400">Saved privately in this browser for this deal.</span>{notesSaved && <span className="text-[10px] text-emerald-600 font-semibold">Saved</span>}</div></section>
+                <section className="bg-white border border-slate-200 rounded-xl p-5"><div className="flex items-center justify-between"><h3 className="font-bold text-sm">Personal preparation notes</h3><button onClick={saveNotes} className="text-xs text-blue-600 font-semibold inline-flex items-center gap-1"><Save className="w-3 h-3" /> Save</button></div><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={7} placeholder="Write your own reminders, buyer context, questions, or points to raise..." className="w-full mt-3 p-3 border border-slate-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 resize-y" /><div className="flex justify-between items-center mt-2"><span className="text-[10px] text-slate-400">Saved privately in this browser for this lead.</span>{notesSaved && <span className="text-[10px] text-emerald-600 font-semibold">Saved</span>}</div></section>
                 <button onClick={startCall} className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm flex justify-center items-center gap-2 shadow-sm"><Play className="w-4 h-4" /> Start Mock Call <ChevronRight className="w-4 h-4" /></button>
                 <p className="text-[10px] text-center text-slate-400">Interactive text-based simulation · Up to 10 response turns</p>
               </aside>
@@ -551,8 +586,8 @@ export const DealWorkspacePage: React.FC = () => {
               </section>
               <section className="bg-white border border-slate-200 rounded-xl p-5"><h3 className="font-bold text-sm mb-4">Skill breakdown</h3><div className="space-y-4">{results.map(metric => <div key={metric.label}><div className="flex justify-between gap-3 text-xs"><span className="font-semibold text-slate-800">{metric.label}</span><span className="font-bold text-slate-900">{metric.score}/100</span></div><div className="h-2 bg-slate-100 rounded-full mt-2 overflow-hidden"><div className="h-full bg-blue-600 rounded-full" style={{ width: `${metric.score}%` }} /></div><p className="text-[11px] text-slate-500 mt-1">{metric.feedback}</p></div>)}</div></section>
               <section className="bg-white border border-slate-200 rounded-xl p-5"><h3 className="font-bold text-sm mb-3">Response-by-response review</h3><div className="space-y-3">{messages.filter(m => m.speaker === 'rep').map((m, i) => <div key={m.id} className="p-3 rounded-lg border border-slate-200"><div className="flex justify-between gap-2"><p className="text-[10px] font-bold uppercase text-slate-400">Your response · Turn {i + 1}</p><span className="text-[10px] font-bold text-blue-700">{m.score}/100</span></div><p className="text-xs text-slate-800 mt-2">{m.text}</p><p className="text-[11px] text-slate-500 mt-2">{m.feedback}</p></div>)}</div></section>
-              <section className="bg-indigo-50 border border-indigo-100 rounded-xl p-5"><h3 className="font-bold text-sm text-indigo-950 flex gap-2"><Lightbulb className="w-4 h-4" /> Recommended next practice</h3><p className="text-xs text-indigo-900 mt-2">{[...results].sort((a, b) => a.score - b.score)[0]?.label || 'Discovery and questioning'} is your lowest-scoring area. Practise this skill in a focused lesson, then retry the deal simulation.</p></section>
-              <div className="flex flex-wrap gap-2"><button onClick={startCall} className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-2"><RotateCcw className="w-4 h-4" /> Retry Mock Call</button><button onClick={() => setPrepStage('briefing')} className="px-4 py-2.5 border border-slate-200 bg-white rounded-lg text-xs font-bold">Review Preparation</button><button onClick={() => navigate(`/${rolePrefix}/practice`)} className="px-4 py-2.5 border border-slate-200 bg-white rounded-lg text-xs font-bold">Practise a Skill</button><button onClick={() => changeTab('overview')} className="px-4 py-2.5 border border-slate-200 bg-white rounded-lg text-xs font-bold">Back to Deal Workspace</button></div>
+              <section className="bg-indigo-50 border border-indigo-100 rounded-xl p-5"><h3 className="font-bold text-sm text-indigo-950 flex gap-2"><Lightbulb className="w-4 h-4" /> Recommended next practice</h3><p className="text-xs text-indigo-900 mt-2">{[...results].sort((a, b) => a.score - b.score)[0]?.label || 'Discovery and questioning'} is your lowest-scoring area. Practise this skill in a focused lesson, then retry the mock call.</p></section>
+              <div className="flex flex-wrap gap-2"><button onClick={startCall} className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-2"><RotateCcw className="w-4 h-4" /> Retry Mock Call</button><button onClick={() => setPrepStage('briefing')} className="px-4 py-2.5 border border-slate-200 bg-white rounded-lg text-xs font-bold">Review Preparation</button><button onClick={createSkillLesson} className="px-4 py-2.5 border border-slate-200 bg-white rounded-lg text-xs font-bold">Create a lesson for {[...results].sort((a, b) => a.score - b.score)[0]?.label || 'this skill'}</button><button onClick={() => changeTab('overview')} className="px-4 py-2.5 border border-slate-200 bg-white rounded-lg text-xs font-bold">Back to Lead Workspace</button></div>
             </div>
           )}
         </div>

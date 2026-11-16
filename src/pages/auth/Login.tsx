@@ -124,7 +124,7 @@ export const Login: React.FC = () => {
               >
                 <option value="client_admin">Client Admin (Company Operations)</option>
                 <option value="manager">Manager (Assigned Team Pipeline)</option>
-                <option value="sales_rep">Sales Representative (Personal Deals & Calls)</option>
+                <option value="sales_rep">Sales Representative (Personal Leads & Calls)</option>
                 <option value="super_admin">Platform Super Admin (Cross-Tenant)</option>
               </select>
             </div>

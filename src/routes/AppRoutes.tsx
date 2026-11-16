@@ -26,13 +26,12 @@ import { GoogleDriveIntegration } from '../pages/admin/GoogleDriveIntegration';
 import { BillingPage } from '../pages/admin/BillingPage';
 
 // Shared Pages
+import { PlatformTelemetryPage } from '../pages/superadmin/PlatformTelemetryPage';
 import { MeetingLibrary } from '../pages/shared/MeetingLibrary';
 import { MeetingReportPage } from '../pages/shared/MeetingReportPage';
 import { DealsPage } from '../pages/shared/DealsPage';
 import { DealWorkspacePage } from '../pages/shared/DealWorkspacePage';
-import { DealAssistancePage } from '../pages/shared/DealAssistancePage';
 import { CompanyIntelligencePage } from '../pages/shared/CompanyIntelligencePage';
-import { DealCoachingPage } from '../pages/shared/DealCoachingPage';
 import { AutomationsPage } from '../pages/shared/AutomationsPage';
 import { KnowledgeBasePage } from '../pages/shared/KnowledgeBasePage';
 import { PracticePage } from '../pages/shared/PracticePage';
@@ -132,12 +131,10 @@ export const AppRoutes: React.FC = () => {
           element={<DataGate keys={['meetings']} title="Meeting"><MeetingReportPage /></DataGate>}
         />
 
-        <Route path="deals" element={<DataGate requiresCrm keys={['deals']} title="Deals"><DealsPage /></DataGate>} />
-        <Route path="deals/:dealId" element={<DataGate requiresCrm keys={['deals','meetings']} title="Deal"><DealWorkspacePage /></DataGate>} />
+        <Route path="leads" element={<DataGate keys={['deals','meetings']} title="Leads"><DealsPage /></DataGate>} />
+        <Route path="leads/:dealId" element={<DataGate keys={['deals','meetings']} title="Lead"><DealWorkspacePage /></DataGate>} />
 
-        <Route path="deal-assistance" element={<DataGate requiresCrm keys={['deals','meetings']} title="Deal Assistance"><DealAssistancePage /></DataGate>} />
         <Route path="company-intelligence" element={<DataGate requiresCrm keys={['deals']} title="Company Intelligence"><CompanyIntelligencePage /></DataGate>} />
-        <Route path="deal-coaching" element={<DataGate requiresCrm keys={['deals','coaching']} title="Deal Coaching"><DealCoachingPage /></DataGate>} />
         <Route path="automations" element={<DataGate keys={['automations']} title="Automations"><AutomationsPage /></DataGate>} />
         <Route path="knowledge-base" element={<DataGate keys={['knowledge']} title="Knowledge Base"><KnowledgeBasePage /></DataGate>} />
 
@@ -163,8 +160,8 @@ export const AppRoutes: React.FC = () => {
         <Route path="dashboard" element={<DataGate keys={['team','meetings']} crmKeys={['deals']} title="Dashboard"><ManagerDashboard /></DataGate>} />
         <Route path="team" element={<DataGate keys={['team']} title="Assigned Reps"><AssignedRepsPage /></DataGate>} />
 
-        <Route path="deals" element={<DataGate requiresCrm keys={['deals']} title="Deals"><DealsPage /></DataGate>} />
-        <Route path="deals/:dealId" element={<DataGate requiresCrm keys={['deals','meetings']} title="Deal"><DealWorkspacePage /></DataGate>} />
+        <Route path="leads" element={<DataGate keys={['deals','meetings']} title="Leads"><DealsPage /></DataGate>} />
+        <Route path="leads/:dealId" element={<DataGate keys={['deals','meetings']} title="Lead"><DealWorkspacePage /></DataGate>} />
 
         <Route path="meetings" element={<DataGate keys={['meetings']} title="Meetings"><MeetingLibrary /></DataGate>} />
         <Route path="meetings/:meetingId" element={<DataGate keys={['meetings']} title="Meeting"><MeetingReportPage /></DataGate>} />
@@ -173,7 +170,6 @@ export const AppRoutes: React.FC = () => {
           element={<Navigate to="/manager/meetings" replace />}
         />
 
-        <Route path="deal-coaching" element={<DataGate requiresCrm keys={['deals','coaching']} title="Deal Coaching"><DealCoachingPage /></DataGate>} />
         <Route path="company-intelligence" element={<DataGate requiresCrm keys={['deals']} title="Company Intelligence"><CompanyIntelligencePage /></DataGate>} />
         <Route path="analytics" element={<DataGate keys={['team','meetings','mockMeetings','billing']} crmKeys={['deals']} title="Analytics"><AnalyticsPage /></DataGate>} />
 
@@ -190,9 +186,9 @@ export const AppRoutes: React.FC = () => {
 
         <Route path="dashboard" element={<DataGate keys={['team','meetings']} crmKeys={['deals']} title="Dashboard"><SalesDashboard /></DataGate>} />
 
-        <Route path="my-deals" element={<DataGate requiresCrm keys={['deals']} title="Deals"><DealsPage /></DataGate>} />
-        <Route path="deals" element={<DataGate requiresCrm keys={['deals']} title="Deals"><DealsPage /></DataGate>} />
-        <Route path="deals/:dealId" element={<DataGate requiresCrm keys={['deals','meetings']} title="Deal"><DealWorkspacePage /></DataGate>} />
+        <Route path="my-leads" element={<Navigate to="/sales/leads" replace />} />
+        <Route path="leads" element={<DataGate keys={['deals','meetings']} title="Leads"><DealsPage /></DataGate>} />
+        <Route path="leads/:dealId" element={<DataGate keys={['deals','meetings']} title="Lead"><DealWorkspacePage /></DataGate>} />
 
         <Route path="meetings" element={<DataGate keys={['meetings']} title="Meetings"><MeetingLibrary /></DataGate>} />
         <Route path="meetings/:meetingId" element={<DataGate keys={['meetings']} title="Meeting"><MeetingReportPage /></DataGate>} />
@@ -201,8 +197,6 @@ export const AppRoutes: React.FC = () => {
           element={<Navigate to="/sales/meetings" replace />}
         />
 
-        <Route path="deal-assistance" element={<DataGate requiresCrm keys={['deals','meetings']} title="Deal Assistance"><DealAssistancePage /></DataGate>} />
-        <Route path="deal-coaching" element={<DataGate requiresCrm keys={['deals','coaching']} title="Deal Coaching"><DealCoachingPage /></DataGate>} />
 
         <Route path="practice" element={<PracticePage />} />
         <Route path="mock-meetings" element={<DataGate keys={['mockMeetings']} title="Mock Meetings"><MockMeetingsPage /></DataGate>} />
@@ -224,7 +218,7 @@ export const AppRoutes: React.FC = () => {
         <Route path="integrations" element={<PlatformIntegrationsPage />} />
         <Route path="cues" element={<PromptManagementPage mode="platform" />} />
 
-        <Route path="analytics" element={<DataGate keys={['team','meetings','mockMeetings','billing']} crmKeys={['deals']} title="Analytics"><AnalyticsPage /></DataGate>} />
+        <Route path="analytics" element={<PlatformTelemetryPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
 

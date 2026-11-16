@@ -21,7 +21,6 @@ import { KnowledgeSource } from '../../types';
 export const KnowledgeBasePage: React.FC = () => {
   const { knowledgeSources, addKnowledgeSource, toggleSourceConsidered } = useStore();
 
-  const [activeTab, setActiveTab] = useState<'sources' | 'testing' | 'logs' | 'map'>('sources');
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
 
@@ -30,11 +29,6 @@ export const KnowledgeBasePage: React.FC = () => {
   const [sourceType, setSourceType] = useState<KnowledgeSource['type']>('PDF');
   const [sourceParam, setSourceParam] = useState('');
   const [qaTag, setQaTag] = useState('Product Knowledge QA');
-
-  // Source test state
-  const [testQuestion, setTestQuestion] = useState('What are the internal bore GD&T tolerances for 5-axis titanium milling?');
-  const [testResult, setTestResult] = useState<string | null>(null);
-  const [isTesting, setIsTesting] = useState(false);
 
   const filteredSources = knowledgeSources.filter(s =>
     s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -50,21 +44,13 @@ export const KnowledgeBasePage: React.FC = () => {
     setSourceParam('');
   };
 
-  const handleRunSourceTest = () => {
-    setIsTesting(true);
-    setTestResult(null);
-    setTimeout(() => {
-      setIsTesting(false);
-      setTestResult(`Grounded Source Citation Match (Confidence 96.4%):\nFound in "Apex_5Axis_CNC_Machining_Capabilities_2026.pdf" [Section 4.2 - Aerospace GD&T Standards]:\n"Standard bore concentricity is held to ±0.005mm (5 microns) post-reaming using Renishaw in-process optical touch probes on Hermle C42 5-axis cells with 70-bar through-spindle coolant."`);
-    }, 1000);
-  };
-
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Knowledge Base & QA Grounding</h1>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Knowledge Base</h1>
+          <p className="mt-1 text-sm text-slate-600">Product and sales material the company has added. Sources switched on are used when SellMore scores calls ({knowledgeSources.length} added).</p>
 
         </div>
 
@@ -76,44 +62,8 @@ export const KnowledgeBasePage: React.FC = () => {
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-4 border-b border-slate-200 text-xs font-semibold">
-        <button
-          onClick={() => setActiveTab('sources')}
-          className={`pb-2.5 transition-colors border-b-2 flex items-center gap-1.5 ${activeTab === 'sources' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-        >
-          <BookOpen className="w-4 h-4" />
-          Indexed Sources ({knowledgeSources.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('testing')}
-          className={`pb-2.5 transition-colors border-b-2 flex items-center gap-1.5 ${activeTab === 'testing' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-        >
-          <Sparkles className="w-4 h-4" />
-          Source Retrieval Testing
-        </button>
-        <button
-          onClick={() => setActiveTab('logs')}
-          className={`pb-2.5 transition-colors border-b-2 flex items-center gap-1.5 ${activeTab === 'logs' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-        >
-          <FileText className="w-4 h-4" />
-          Query Logs & Citations
-        </button>
-        <button
-          onClick={() => setActiveTab('map')}
-          className={`pb-2.5 transition-colors border-b-2 flex items-center gap-1.5 ${activeTab === 'map' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-        >
-          <Layers className="w-4 h-4" />
-          Knowledge Map Clusters
-        </button>
-      </div>
-
-      {/* Tab 1: Sources Table */}
-      {activeTab === 'sources' && (
+      {/* Sources */}
+      {(
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
             <div className="relative w-full sm:w-80">
@@ -136,9 +86,9 @@ export const KnowledgeBasePage: React.FC = () => {
                     <th className="py-3 px-4">Source Title</th>
                     <th className="py-3 px-4">Type</th>
                     <th className="py-3 px-4">Size / URL</th>
-                    <th className="py-3 px-4">Tagged QA Assessment</th>
-                    <th className="py-3 px-4">Consider in QA</th>
-                    <th className="py-3 px-4">Indexed Queries</th>
+                    <th className="py-3 px-4">Used for</th>
+                    <th className="py-3 px-4">Use in scoring</th>
+                    <th className="py-3 px-4">Citations</th>
                     <th className="py-3 px-4">Status</th>
                   </tr>
                 </thead>
@@ -181,105 +131,13 @@ export const KnowledgeBasePage: React.FC = () => {
                       </td>
                     </tr>
                   ))}
+                  {filteredSources.length === 0 && (
+                    <tr><td colSpan={7} className="py-10 text-center text-slate-500">
+                      {knowledgeSources.length === 0 ? 'No sources yet. Add a product sheet, spec or website to get started.' : 'No sources match your search.'}
+                    </td></tr>
+                  )}
                 </tbody>
               </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 2: Retrieval Testing */}
-      {activeTab === 'testing' && (
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-2xs space-y-4 max-w-2xl text-xs">
-          <div>
-            <h3 className="font-bold text-slate-900 text-sm">Test Grounded Semantic Retrieval</h3>
-            <p className="text-slate-500 text-xs mt-0.5">
-              Enter an engineering or commercial inquiry to verify that your uploaded documents are correctly matched and cited.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <label className="font-semibold text-slate-700">Test Query</label>
-            <input
-              type="text"
-              value={testQuestion}
-              onChange={e => setTestQuestion(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 font-medium"
-            />
-          </div>
-
-          <button
-            onClick={handleRunSourceTest}
-            disabled={isTesting}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            {isTesting ? 'Searching Indexed Knowledge...' : 'Run Retrieval Test'}
-          </button>
-
-          {testResult && (
-            <div className="mt-4 p-4 rounded-xl bg-slate-900 text-slate-100 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-              {testResult}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Tab 3: Query Logs */}
-      {activeTab === 'logs' && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden text-xs">
-          <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 font-semibold text-slate-700">
-            Recent Speech-to-Document QA Evaluations
-          </div>
-          <div className="divide-y divide-slate-100 p-4 space-y-3">
-            {[
-              { q: 'Did rep quote 70-bar through-spindle coolant for titanium?', match: 'Apex_5Axis_CNC_Machining_Capabilities_2026.pdf', time: 'Today 14:32', status: 'Verified' },
-              { q: 'Was standard $8,500 dedicated tooling fee defended?', match: 'Pricing_and_Surcharge_Policy_2026.pdf', time: 'Today 14:30', status: 'Verified' },
-              { q: 'Did rep promise unverified Class 7 cleanroom packaging?', match: 'Cleanroom_ISO_Class7_SOP.docx', time: 'Nov 8, 2026', status: 'Flagged' }
-            ].map((log, i) => (
-              <div key={i} className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between gap-3">
-                <div>
-                  <div className="font-semibold text-slate-900">{log.q}</div>
-                  <div className="text-[11px] text-blue-600 font-mono mt-0.5">Matched source: {log.match}</div>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-mono text-[10px] text-slate-400 block">{log.time}</span>
-                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                    {log.status}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Tab 4: Knowledge Map */}
-      {activeTab === 'map' && (
-        <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-2xs text-center space-y-4">
-          <div className="max-w-md mx-auto">
-            <Layers className="w-10 h-10 text-blue-600 mx-auto mb-2" />
-            <h3 className="font-bold text-slate-900 text-sm">Semantic Knowledge Clusters</h3>
-            <p className="text-xs text-slate-500 mt-1">
-              Interactive map linking company technical documentation with customer conversation cues.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs pt-4">
-            <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-left space-y-1">
-              <span className="font-mono font-bold text-blue-800 text-[11px]">Cluster A: 5-Axis Milling</span>
-              <p className="text-blue-900">Covers DMG MORI, Hermle C42, ±0.005mm tolerances, and AS9100D certifications.</p>
-              <span className="text-[10px] font-mono text-blue-600 block pt-1">3 Sources · 142 Citations</span>
-            </div>
-            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-left space-y-1">
-              <span className="font-mono font-bold text-emerald-800 text-[11px]">Cluster B: Commercial & Tooling</span>
-              <p className="text-emerald-900">Covers $8,500 fixture surcharges, LME raw metal indexation, and Net-30 terms.</p>
-              <span className="text-[10px] font-mono text-emerald-600 block pt-1">2 Sources · 110 Citations</span>
-            </div>
-            <div className="p-4 rounded-xl bg-purple-50 border border-purple-200 text-left space-y-1">
-              <span className="font-mono font-bold text-purple-800 text-[11px]">Cluster C: Quality & Cleanroom</span>
-              <p className="text-purple-900">Covers ISO Class 7 packaging, FDA ISO 13485 medical, and laser tool probing.</p>
-              <span className="text-[10px] font-mono text-purple-600 block pt-1">2 Sources · 89 Citations</span>
             </div>
           </div>
         </div>

@@ -146,7 +146,7 @@ export const Checkout: React.FC = () => {
                     onClick={() => handlePay(true)}
                     className="text-[11px] text-slate-400 hover:text-rose-600 underline"
                   >
-                    Simulate Payment Gateway Failure (to test PRD Section 6.5 error state)
+                    Simulate Payment Gateway Failure (to test the error state)
                   </button>
                 </div>
               </div>
@@ -214,7 +214,7 @@ export const Checkout: React.FC = () => {
               <div>
                 <h3 className="text-xl font-bold text-slate-900">Payment Authorization Failed</h3>
                 <p className="text-xs text-slate-600 mt-1 max-w-md mx-auto">
-                  The payment gateway declined this card. Per PRD Section 6.5, your current subscription access remains unchanged and no features have been activated.
+                  The payment gateway declined this card. Your current subscription access remains unchanged and no features have been activated.
                 </p>
               </div>
 

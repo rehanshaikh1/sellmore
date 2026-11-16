@@ -218,7 +218,7 @@ export const GoogleDriveIntegration: React.FC = () => {
           </div>
         )}
 
-        {/* Manual Upload Reminder Banner (Mandatory PRD Section 7.8) */}
+        {/* Manual Upload Reminder Banner */}
         <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-start gap-3">
           <UploadCloud className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
           <div>

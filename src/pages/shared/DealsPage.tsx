@@ -4,6 +4,7 @@ import { useStore } from '../../store/useStore';
 import { useAccess } from '../../store/useAccess';
 import { DEAL_STAGES, computeDealRisks, isClosedStage } from '../../lib/deals';
 import { Link } from 'react-router-dom';
+import { LinkDealControl } from '../../components/common/LinkDealControl';
 import {
   Search,
   ChevronRight,
@@ -34,6 +35,8 @@ export const DealsPage: React.FC = () => {
         : 'admin';
 
   const scopedDeals = deals;
+  // Calls that belong to no lead yet. Each can be linked to a lead or turned into a new one.
+  const orphanCalls = scope(meetings, m => m.representativeId).filter(m => !m.associatedDealId);
   const ownerNames = Array.from(new Set(deals.map(d => d.ownerName))).sort();
 
   const filteredDeals = scopedDeals
@@ -105,7 +108,7 @@ export const DealsPage: React.FC = () => {
     name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 
   const dealPath = (dealId: string) =>
-    `/${rolePrefix}/deals/${dealId}`;
+    `/${rolePrefix}/leads/${dealId}`;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -115,7 +118,7 @@ export const DealsPage: React.FC = () => {
         <div>
           <div className="flex items-center gap-6">
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-              Deal Dashboard
+              Lead Dashboard
             </h1>
 
             {/* <nav className="flex items-center gap-1">
@@ -127,7 +130,7 @@ export const DealsPage: React.FC = () => {
               </Link>
 
               <Link
-                to={`/${rolePrefix}/deals`}
+                to={`/${rolePrefix}/leads`}
                 className="px-3 py-1.5 text-xs font-bold text-blue-600 border-b-2 border-blue-600"
               >
                 Deals
@@ -154,6 +157,27 @@ export const DealsPage: React.FC = () => {
         </button>
       </div>
 
+      {orphanCalls.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white">
+          <header className="border-b border-slate-200 px-5 py-3.5">
+            <h2 className="text-[13px] font-semibold text-slate-900">Calls without a lead</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Link a call to an existing lead, or create a new lead from it. This works without a CRM.</p>
+          </header>
+          <ul className="divide-y divide-slate-100">
+            {orphanCalls.slice(0, 6).map(m => (
+              <li key={m.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+                <div className="min-w-0">
+                  <Link to={`/${rolePrefix}/meetings/${m.id}`} className="block truncate text-[13px] font-medium text-slate-900 hover:text-blue-700 hover:underline">{m.name}</Link>
+                  <div className="text-xs text-slate-400">{m.representativeName} · {m.uploadDate}</div>
+                </div>
+                <LinkDealControl meeting={m} />
+              </li>
+            ))}
+          </ul>
+          {orphanCalls.length > 6 && <p className="border-t border-slate-100 px-5 py-2.5 text-xs text-slate-500">{orphanCalls.length - 6} more in the <Link to={`/${rolePrefix}/meetings`} className="text-blue-700 underline">Meeting Library</Link>.</p>}
+        </section>
+      )}
+
       {/* AI Risk Analysis */}
       {showRiskModal && (
         <div className="p-5 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white rounded-xl border border-indigo-800 shadow-xl space-y-4">
@@ -177,7 +201,7 @@ export const DealsPage: React.FC = () => {
           </div>
 
           {riskItems.length === 0 && (
-            <p className="text-xs text-indigo-200">No open deals have risks right now.</p>
+            <p className="text-xs text-indigo-200">No open leads have risks right now.</p>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
@@ -221,10 +245,10 @@ export const DealsPage: React.FC = () => {
               onChange={e => setStatusFilter(e.target.value as any)}
               className="bg-transparent font-semibold text-slate-900"
             >
-              <option value="active">Active deals</option>
+              <option value="active">Active leads</option>
               <option value="won">Closed Won</option>
               <option value="lost">Closed Lost</option>
-              <option value="all">All deals</option>
+              <option value="all">All leads</option>
             </select>
           </div>
 
@@ -277,7 +301,7 @@ export const DealsPage: React.FC = () => {
         <div className="relative w-full sm:w-64">
           <input
             type="text"
-            placeholder="Search deals..."
+            placeholder="Search leads..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             className="w-full pl-8 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-slate-50"
@@ -292,13 +316,13 @@ export const DealsPage: React.FC = () => {
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-200">
               <tr>
-                <th className="py-3 px-4">Deal Name</th>
-                <th className="py-3 px-4">Deal Stage</th>
+                <th className="py-3 px-4">Lead Name</th>
+                <th className="py-3 px-4">Lead Stage</th>
                 <th className="py-3 px-4">Last Meeting</th>
                 <th className="py-3 px-4">Next Meeting</th>
                 <th className="py-3 px-4 text-right">Amount</th>
                 <th className="py-3 px-4">Close Date</th>
-                <th className="py-3 px-4">Deal Owner</th>
+                <th className="py-3 px-4">Lead Owner</th>
                 <th className="py-3 px-4 text-right">Action</th>
               </tr>
             </thead>
@@ -321,7 +345,7 @@ export const DealsPage: React.FC = () => {
                       {deal.companyName}
                       {deal.source === 'draft' && (
                         <span className="ml-2 px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[10px] font-semibold">
-                          Draft · not in Salesforce yet
+                          SellMore lead
                         </span>
                       )}
                     </div>
@@ -389,7 +413,7 @@ export const DealsPage: React.FC = () => {
               {filteredDeals.length === 0 && (
                 <tr>
                   <td colSpan={8} className="py-12 text-center text-slate-500">
-                    No deals match your filters.
+                    No leads match your filters.
                   </td>
                 </tr>
               )}

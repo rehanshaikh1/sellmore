@@ -65,7 +65,7 @@ export const PricingPage: React.FC = () => {
       category: 'Coaching & Enablement',
       features: [
         { name: 'AI Mock Meeting Voice Roleplay', free: false, starter: false, growth: true, enterprise: true },
-        { name: 'Deal Coaching Multi-Lesson Tracks', free: false, starter: false, growth: true, enterprise: true },
+        { name: 'Lead Coaching Multi-Lesson Tracks', free: false, starter: false, growth: true, enterprise: true },
         { name: 'AI Deal Doctor & Win Probability', free: false, starter: true, growth: true, enterprise: true },
         { name: 'Rep Scorecards & Talk-to-Listen Ratio', free: false, starter: true, growth: true, enterprise: true },
       ]
@@ -118,7 +118,7 @@ export const PricingPage: React.FC = () => {
             Predictable Plans for High-Performance Teams
           </h1>
           <p className="mt-4 text-base text-slate-600">
-            Start free with 10 meeting analyses or unlock Salesforce CRM sync, in-meeting Live Assist, and AI Deal Coaching.
+            Start free with 10 meeting analyses or unlock Salesforce CRM sync, in-meeting Live Assist, and AI Lead Coaching.
           </p>
 
           {/* Billing Cadence Toggle */}

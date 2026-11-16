@@ -12,17 +12,14 @@ import {
   Trash2,
   FileCheck
 } from 'lucide-react';
-import { PlanUpgradeModal } from '../../components/common/PlanUpgradeModal';
 
 export const CompanyDocuments: React.FC = () => {
   const { companyDocuments, addCompanyDocument, toggleDocumentConsidered, currentPlan } = useStore();
 
-  const [activeTab, setActiveTab] = useState<'docs' | 'prompts'>('docs');
   const [docName, setDocName] = useState('');
   const [docSize, setDocSize] = useState('2.4 MB');
   const [taggedAssessment, setTaggedAssessment] = useState('Product Knowledge QA');
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
   const assessmentCategories = [
     'Product Knowledge QA',
@@ -32,32 +29,6 @@ export const CompanyDocuments: React.FC = () => {
     'Compliance & ISO QA'
   ];
 
-  const PREDEFINED_QA_PROMPTS = [
-    {
-      id: 'qa_1',
-      assessment: 'Product Knowledge QA',
-      description: 'Evaluates whether the sales rep accurately represents 5-axis DMG MORI specifications, machine envelope limits, and ISO cleanroom certifications.',
-      promptTemplate: `Assess the sales representative against uploaded Company Documentation tagged with "Product Knowledge QA".
-Evaluate whether the rep accurately cited:
-1. Spindle maximum RPM and high-pressure coolant bars (70 bar).
-2. Cleanroom ISO Class 7 packaging protocols.
-Award score 0-5. Cite exact transcript timestamps and contrast with source documentation.`
-    },
-    {
-      id: 'qa_2',
-      assessment: 'Technical Feasibility QA',
-      description: 'Checks for technical feasibility commitments regarding titanium work hardening and geometric tolerances.',
-      promptTemplate: `Review customer drawing requirements against the Aerospace Titanium Milling Feasibility Handbook.
-Flag any unrealistic lead times or unverified ±0.005mm concentricity promises made without engineering sign-off.`
-    },
-    {
-      id: 'qa_3',
-      assessment: 'Commercial Awareness QA',
-      description: 'Enforces adherence to standard surcharge policies and minimum order value guidelines.',
-      promptTemplate: `Examine commercial discussions regarding dedicated tooling fees ($8,500 baseline) and raw material indexation.
-Verify rep followed the authorized amortization script instead of offering unauthorized waivers.`
-    }
-  ];
 
   const handleUploadSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,7 +43,7 @@ Verify rep followed the authorized amortization script instead of offering unaut
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-200">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Company Documentation & QA Prompts</h1>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Company Documents</h1>
           <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
             Upload proprietary manufacturing specifications to ground automated QA assessments.
           </p>
@@ -87,32 +58,10 @@ Verify rep followed the authorized amortization script instead of offering unaut
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-6 border-b border-slate-200 text-xs font-semibold">
-        <button
-          onClick={() => setActiveTab('docs')}
-          className={`pb-3 transition-colors border-b-2 flex items-center gap-2 tracking-tight ${
-            activeTab === 'docs' ? 'border-blue-600 text-blue-600 font-bold' : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <FileText className="w-4 h-4" />
-          <span>Uploaded Documents ({companyDocuments.length})</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('prompts')}
-          className={`pb-3 transition-colors border-b-2 flex items-center gap-2 tracking-tight ${
-            activeTab === 'prompts' ? 'border-blue-600 text-blue-600 font-bold' : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <BookOpen className="w-4 h-4" />
-          <span>Predefined QA Prompts {currentPlan === 'free' && '(View-Only)'}</span>
-        </button>
-      </div>
-
-      {activeTab === 'docs' ? (
+      {(
         <div className="space-y-4">
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs text-slate-600">
-            Per PRD Section 7.5, the Free Plan permits document upload and tagging to relevant QA assessments. You can toggle whether each document should be considered during cue scoring.
+            The Free Plan permits document upload and tagging to relevant QA assessments. You can toggle whether each document should be considered during cue scoring.
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
@@ -166,49 +115,6 @@ Verify rep followed the authorized amortization script instead of offering unaut
                 </tbody>
               </table>
             </div>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {currentPlan === 'free' && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Lock className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>
-                  <strong>Free Plan Restriction:</strong> Predefined QA prompts are view-only. Custom prompt editing requires an upgrade to Growth or Enterprise.
-                </span>
-              </div>
-              <button
-                onClick={() => setUpgradeModalOpen(true)}
-                className="font-bold underline hover:text-amber-900 shrink-0 ml-2"
-              >
-                Upgrade to Edit
-              </button>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 gap-4">
-            {PREDEFINED_QA_PROMPTS.map(item => (
-              <div key={item.id} className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-900">{item.assessment}</span>
-                    <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
-                      System Preset
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-slate-400 flex items-center gap-1">
-                    <Eye className="w-3.5 h-3.5" /> View Only
-                  </div>
-                </div>
-
-                <p className="text-xs text-slate-600">{item.description}</p>
-
-                <div className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-                  {item.promptTemplate}
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       )}
@@ -273,12 +179,6 @@ Verify rep followed the authorized amortization script instead of offering unaut
         </div>
       )}
 
-      <PlanUpgradeModal
-        isOpen={upgradeModalOpen}
-        onClose={() => setUpgradeModalOpen(false)}
-        featureTitle="Custom QA Prompt Editing Locked"
-        featureDescription="Editing predefined QA prompts is disabled on the Free Plan. Upgrade to customize scoring rubrics."
-      />
     </div>
   );
 };

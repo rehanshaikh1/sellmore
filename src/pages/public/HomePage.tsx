@@ -548,7 +548,7 @@ export const HomePage: React.FC = () => {
               {
                 icon: Zap,
                 tone: 'bg-violet-50 text-violet-600',
-                title: 'Deal Workspace',
+                title: 'Lead Workspace',
                 text: 'One page per deal with stakeholders, risks, timeline, next steps and every meeting held for that deal, so nothing is lost between calls.'
               },
               {
@@ -560,7 +560,7 @@ export const HomePage: React.FC = () => {
               {
                 icon: GraduationCap,
                 tone: 'bg-purple-50 text-purple-600',
-                title: 'Deal Coaching & Practice',
+                title: 'Lead Coaching & Practice',
                 text: 'Personalised coaching lessons based on real calls, plus mock meetings with an AI buyer so reps can rehearse a tough conversation before it happens.'
               },
               {

@@ -19,7 +19,8 @@ import { getAssignedReps, getUnassignedReps } from '../../lib/access';
 import { PlanUpgradeModal } from '../../components/common/PlanUpgradeModal';
 
 export const TeamManagement: React.FC = () => {
-  const { teamMembers, currentPlan, inviteTeamMember, toggleMemberStatus, resendInvite, assignManager } = useStore();
+  const { teamMembers, currentPlan, inviteTeamMember, toggleMemberStatus, resendInvite, assignManager, platformLimits } = useStore();
+  const expiryHours = platformLimits.inviteExpiryHours;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'manager' | 'sales_rep'>('all');
@@ -74,7 +75,7 @@ export const TeamManagement: React.FC = () => {
       return;
     }
 
-    setInviteSuccess(`Invitation sent to ${inviteEmail}. Link expires in 48 hours.`);
+    setInviteSuccess(`Invitation sent to ${inviteEmail}. Link expires in ${expiryHours} hours.`);
     setTimeout(() => {
       setIsInviteModalOpen(false);
       setInviteName('');
@@ -146,7 +147,7 @@ export const TeamManagement: React.FC = () => {
           <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
           <span>
             <strong>{unassignedReps.length} sales representative{unassignedReps.length === 1 ? ' has' : 's have'} no manager:</strong>{' '}
-            {unassignedReps.map(r => r.name).join(', ')}. Their meetings and deals are visible to you but not to any manager until you assign one below.
+            {unassignedReps.map(r => r.name).join(', ')}. Their meetings and leads are visible to you but not to any manager until you assign one below.
           </span>
         </div>
       )}
@@ -258,7 +259,7 @@ export const TeamManagement: React.FC = () => {
                       <span className="text-slate-600 text-[11px] font-medium">Accepted</span>
                     ) : member.invitationStatus === 'pending' ? (
                       <span className="inline-flex items-center gap-1 text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md text-[11px] font-semibold border border-amber-200/80">
-                        <Clock className="w-3 h-3 text-amber-600" /> 48h Pending
+                        <Clock className="w-3 h-3 text-amber-600" /> {expiryHours}h Pending
                       </span>
                     ) : (
                       <span className="text-rose-600 text-[11px] font-semibold">Expired</span>
@@ -377,11 +378,11 @@ export const TeamManagement: React.FC = () => {
                   onChange={e => setInviteRole(e.target.value as 'manager' | 'sales_rep')}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500 bg-white"
                 >
-                  <option value="sales_rep">Sales Representative (Personal deals & calls)</option>
+                  <option value="sales_rep">Sales Representative (Personal leads & calls)</option>
                   <option value="manager">Sales Manager (Assigned team pipeline)</option>
                 </select>
                 <p className="text-[10px] text-slate-400 mt-1">
-                  Role is strictly restricted to Manager or Sales Representative per PRD Section 7.3.
+                  Role is strictly restricted to Manager or Sales Representative.
                 </p>
               </div>
 
@@ -403,7 +404,7 @@ export const TeamManagement: React.FC = () => {
               <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800 flex items-start gap-2">
                 <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <span>
-                  The invitation link expires automatically after <strong>48 hours</strong>. The user will be prompted to set their password upon clicking.
+                  The invitation link expires automatically after <strong>{expiryHours} hours</strong>. The user will be prompted to set their password upon clicking.
                 </span>
               </div>
 

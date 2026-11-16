@@ -20,6 +20,7 @@ import {
 import { SalesCue } from '../../types';
 import { SOURCE_LABELS } from '../../components/common/SourceBadge';
 import { LinkDealControl } from '../../components/common/LinkDealControl';
+import { LessonBuilderPanel } from '../../components/practice/LessonBuilderPanel';
 
 type TabKey = 'overview' | 'scorecard' | 'cues' | 'objections' | 'transcript' | 'improve';
 
@@ -136,7 +137,7 @@ const BulletList: React.FC<{ items: string[]; marker: string; empty: string }> =
 
 export const MeetingReportPage: React.FC = () => {
   const { meetingId } = useParams<{ meetingId: string }>();
-  const { meetings, currentRole, crmConnected, retryMeetingAnalysis } = useStore();
+  const { meetings, currentRole, retryMeetingAnalysis } = useStore();
   const { canAccess } = useAccess();
 
   const meeting = meetings.find(m => m.id === meetingId);
@@ -298,10 +299,10 @@ export const MeetingReportPage: React.FC = () => {
           Meeting Library
         </Link>
 
-        {crmConnected && (
+        {(
           meeting.associatedDealId && meeting.associatedDealName ? (
             <Link
-              to={`/${rolePrefix}/deals/${meeting.associatedDealId}`}
+              to={`/${rolePrefix}/leads/${meeting.associatedDealId}`}
               className="inline-flex items-center gap-1 text-[13px] font-medium text-blue-700 hover:underline"
             >
               <span className="max-w-[18rem] truncate">{meeting.associatedDealName}</span>
@@ -814,21 +815,9 @@ export const MeetingReportPage: React.FC = () => {
                   </ol>
                 )}
 
-                {crmConnected && (
-                  <div className="border-t border-slate-200 px-5 py-3.5 text-[13px]">
-                    {meeting.associatedDealId ? (
-                      <Link
-                        to={`/${rolePrefix}/deal-coaching?deal=${meeting.associatedDealId}`}
-                        className="inline-flex items-center gap-1 font-medium text-blue-700 hover:underline"
-                      >
-                        Open deal coaching for {meeting.associatedDealName}
-                        <ArrowUpRight className="h-3.5 w-3.5" />
-                      </Link>
-                    ) : (
-                      <span className="text-slate-500">Link this call to a deal to build deal coaching from it.</span>
-                    )}
-                  </div>
-                )}
+                <div className="border-t border-slate-200 px-5 py-5">
+                  <LessonBuilderPanel meetings={[meeting]} origin="meeting" meeting={meeting} rolePrefix={rolePrefix} />
+                </div>
               </Panel>
             )}
           </div>

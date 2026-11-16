@@ -17,11 +17,11 @@ const AUDIT_DATA: AuditItem[] = [
     id: 'PRD-1-5',
     section: 'Sections 1–5',
     requirement: 'Hybrid Architecture, Roles (Admin, Manager, Rep, Super Admin), & End-to-End Journeys',
-    screenComponent: 'Role-aware layouts, AppRoutes, DemoBar switcher, Global Meeting Library & Deal Workspace',
+    screenComponent: 'Role-aware layouts, AppRoutes, DemoBar switcher, Global Meeting Library & Lead Workspace',
     roles: 'Client Admin, Manager, Sales Rep, Super Admin',
     planState: 'Free & Paid',
     status: 'Covered',
-    notes: 'Canonical meeting identity preserved across Global Meeting Library and Deal Workspace. Distinct IA per role.'
+    notes: 'Canonical meeting identity preserved across Global Meeting Library and Lead Workspace. Distinct IA per role.'
   },
   {
     id: 'PRD-6-7',
@@ -66,12 +66,12 @@ const AUDIT_DATA: AuditItem[] = [
   {
     id: 'PRD-14-16',
     section: 'Sections 14–16',
-    requirement: 'Deal Assistance Q&A, Company Intelligence under Analytics, and multi-lesson Deal Coaching (Manager & Rep modes)',
+    requirement: 'Lead Workspace with Ask AI and Coaching, Company Intelligence under Analytics, and lessons built from meeting gaps',
     screenComponent: 'DealAssistancePage, CompanyIntelligencePage, DealCoachingPage',
     roles: 'Manager & Sales Rep (scoped)',
     planState: 'Paid feature',
     status: 'Covered',
-    notes: 'Coaching program tailored to specific deal (AeroDynamics titanium tooling) with progress tracking and talk tracks.'
+    notes: 'Coaching program tailored to specific lead (AeroDynamics titanium tooling) with progress tracking and talk tracks.'
   },
   {
     id: 'PRD-17-18',
@@ -272,7 +272,7 @@ export const AuditCoverageModal: React.FC<{ isOpen: boolean; onClose: () => void
                     Task Intelligence paused
                   </div>
                   <p className="text-slate-600 mt-1">
-                    Tasks and follow-ups are removed until the deal and Salesforce features are complete.
+                    Tasks and follow-ups are removed until the lead and Salesforce features are complete.
                   </p>
                 </div>
 

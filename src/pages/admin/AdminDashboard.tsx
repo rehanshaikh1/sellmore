@@ -206,7 +206,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           <div className="mt-4 text-[11px] text-slate-500 flex items-center justify-between">
-            <span>{crmConnected ? 'Syncs Leads & Deals' : 'Connect for Deal Context'}</span>
+            <span>{crmConnected ? 'Syncs Leads & Leads' : 'Connect for Lead Context'}</span>
             <span className="text-blue-600 group-hover:underline font-semibold flex items-center">
               Configure <ArrowUpRight className="w-3 h-3 ml-0.5" />
             </span>
@@ -216,12 +216,12 @@ export const AdminDashboard: React.FC = () => {
         {/* Active Deals Pipeline */}
         {crmConnected && (
           <Link
-            to="/admin/deals"
+            to="/admin/leads"
             className="bg-white p-5 rounded-xl border border-slate-200/90 shadow-2xs hover:border-blue-400 hover:shadow-xs transition-all group"
           >
             <div className="flex items-center justify-between text-xs text-slate-500">
               <span className="font-semibold text-slate-600 uppercase tracking-wider text-[11px]">
-                Assigned Deals Pipeline
+                Assigned Leads Pipeline
               </span>
               <Briefcase className="w-4 h-4 text-slate-400 group-hover:text-blue-600 transition-colors" />
             </div>
@@ -317,7 +317,7 @@ export const AdminDashboard: React.FC = () => {
 
                         {meeting.associatedDealName && (
                           <div className="text-[11px] text-slate-400 font-normal truncate mt-0.5">
-                            Deal: {meeting.associatedDealName}
+                            Lead: {meeting.associatedDealName}
                           </div>
                         )}
                       </td>
@@ -421,7 +421,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div>
             <h3 className="font-bold text-slate-900 text-xs group-hover:text-blue-600 transition-colors tracking-tight">
-              Company Documentation & QA Prompts
+              Company Documents
             </h3>
             <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
               Upload company engineering handbooks and tag them to Product Knowledge or Feasibility QA assessments.

@@ -50,17 +50,17 @@ export const CRMIntegration: React.FC = () => {
               <div className="text-sm font-semibold text-slate-900">Salesforce is connected</div>
               <p className="mt-0.5 text-[13px] text-slate-600">
                 {deals.length > 0
-                  ? `${deals.length} deal${deals.length === 1 ? ' is' : 's are'} ready. Open the Deal Workspace to see your pipeline.`
-                  : 'Run "Sync now" below to bring in your deals, then open the Deal Workspace.'}
+                  ? `${deals.length} lead${deals.length === 1 ? ' is' : 's are'} ready. Open the Lead Workspace to see your pipeline.`
+                  : 'Run "Sync now" below to bring in your leads, then open the Lead Workspace.'}
               </p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Link
-              to="/admin/deals"
+              to="/admin/leads"
               className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-4 py-2 text-[13px] font-medium text-white hover:bg-slate-800"
             >
-              Open Deal Workspace <ArrowRight className="h-3.5 w-3.5" />
+              Open Lead Workspace <ArrowRight className="h-3.5 w-3.5" />
             </Link>
             <button
               type="button"
@@ -224,13 +224,6 @@ export const CRMIntegration: React.FC = () => {
           </div>
         )}
 
-        {/* Conceptual Data Relationship Safeguard Notice (PRD Section 13.2) */}
-        <div className="bg-slate-50 px-6 py-3.5 border-t border-slate-200 text-xs text-slate-600 flex items-start gap-2.5">
-          <ShieldAlert className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-          <span>
-            <strong>Opportunity Association Rule (PRD §13.2):</strong> A contact may participate in multiple Opportunities. SellMore inspects Salesforce Opportunity Contact Roles and active activity references; it does not merge separate purchases simply because the contact email matches.
-          </span>
-        </div>
       </div>
 
 

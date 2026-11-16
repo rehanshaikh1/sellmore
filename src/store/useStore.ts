@@ -8,6 +8,7 @@ import {
   MeetingRecord, 
   DealRecord, 
   DealCoachingProgram, 
+  LessonSpec,
   CoachingLesson,
   CuePrompt,
   CueInput,
@@ -15,7 +16,12 @@ import {
   KnowledgeSource, 
   MockMeetingHistoryItem, 
   CreditTransaction, 
-  CompanyDocument 
+  CompanyDocument,
+  PlatformTenant,
+  PlatformPlan,
+  PlatformLimits,
+  PlatformActivity,
+  TenantStatus
 } from '../types';
 import { 
   INITIAL_USERS, 
@@ -118,8 +124,15 @@ interface AppState {
   deals: DealRecord[];
   /** One coaching programme per deal, keyed by deal id. */
   coachingPrograms: Record<string, DealCoachingProgram>;
+  /** Practice lessons users created from meeting and lead gaps. */
+  practiceLessons: LessonSpec[];
   /** Default sales cue prompts, managed by the super admin. They apply to every business. */
   platformCues: CuePrompt[];
+  /** Customer businesses, plans, upload limits and a log of what the super admin changed. */
+  platformTenants: PlatformTenant[];
+  platformPlans: PlatformPlan[];
+  platformLimits: PlatformLimits;
+  platformActivity: PlatformActivity[];
   /** This business's own cues: replacements for platform defaults, and custom cues. */
   companyCues: CuePrompt[];
   automations: AutomationWorkflow[];
@@ -156,6 +169,9 @@ interface AppState {
   /** For a call with no Opportunity yet: create a SellMore-only draft deal and link the call to it. */
   createDraftDeal: (meetingId: string, dealName: string, companyName: string) => { success: boolean; error?: string; dealId?: string };
 
+  addPracticeLessons: (specs: LessonSpec[]) => void;
+  removePracticeLesson: (id: string) => void;
+
   // Coaching Actions (per deal)
   generateCoachingProgram: (dealId: string) => { success: boolean; error?: string };
   /** Add lessons for analysed calls that arrived after the programme was built. */
@@ -170,6 +186,15 @@ interface AppState {
   updatePlatformCue: (id: string, input: Partial<CueInput>) => { success: boolean; error?: string };
   deletePlatformCue: (id: string) => { success: boolean; error?: string };
   resetPlatformCues: () => void;
+
+  // Platform management. Super admin only.
+  addTenant: (input: { name: string; adminName: string; adminEmail: string; plan: import('../types').PlanTier }) => { success: boolean; error?: string };
+  updateTenant: (id: string, patch: Partial<Pick<PlatformTenant, 'name' | 'adminName' | 'adminEmail' | 'renewal' | 'notes' | 'seatsUsed' | 'meetingsUsed'>>) => { success: boolean; error?: string };
+  changeTenantPlan: (id: string, plan: import('../types').PlanTier) => { success: boolean; error?: string };
+  setTenantStatus: (id: string, status: TenantStatus) => { success: boolean; error?: string };
+  deleteTenant: (id: string) => { success: boolean; error?: string };
+  updatePlatformPlan: (id: import('../types').PlanTier, patch: Partial<Omit<PlatformPlan, 'id'>>) => { success: boolean; error?: string };
+  updatePlatformLimits: (limits: PlatformLimits) => { success: boolean; error?: string };
   /** Create or update a company cue. With `platformId` it replaces that platform default for this business. */
   saveCompanyCue: (input: CueInput & { id?: string; platformId?: string }) => { success: boolean; error?: string };
   deleteCompanyCue: (id: string) => { success: boolean; error?: string };
@@ -441,16 +466,16 @@ const syncSalesforce = (get: StoreGet, set: StoreSet) => {
       } : d);
       importedCalls.push(`"${meetingName}" linked to "${deal.name}"`);
     } else {
-      importedCalls.push(`"${meetingName}" has no Opportunity, so it is marked No deal linked`);
+      importedCalls.push(`"${meetingName}" has no Opportunity, so it is marked No lead linked`);
     }
   });
 
   // What the admin sees on the CRM page.
   const parts: string[] = [];
   if (createdDeals.length) {
-    parts.push(`Created ${createdDeals.length} deal${createdDeals.length === 1 ? '' : 's'} from Salesforce Opportunities: ${createdDeals.join(', ')}.`);
+    parts.push(`Created ${createdDeals.length} lead${createdDeals.length === 1 ? '' : 's'} from Salesforce Opportunities: ${createdDeals.join(', ')}.`);
   }
-  if (mergedDrafts.length) parts.push(`Merged draft deals: ${mergedDrafts.join('; ')}. Their calls were kept.`);
+  if (mergedDrafts.length) parts.push(`Merged draft leads: ${mergedDrafts.join('; ')}. Their calls were kept.`);
   if (importedCalls.length) {
     parts.push(`Imported ${importedCalls.length} recording${importedCalls.length === 1 ? '' : 's'}: ${importedCalls.join('; ')}.`);
   }
@@ -463,6 +488,25 @@ const syncSalesforce = (get: StoreGet, set: StoreSet) => {
     crmLastSyncResult: parts.length ? parts.join(' ') : 'Already up to date. No new recordings in Salesforce.'
   });
 };
+
+export const DEFAULT_PLATFORM_TENANTS = (): PlatformTenant[] => [
+  { id: 'ten_001', name: 'Apex Precision Engineering Ltd', adminName: 'Sarah Lin', adminEmail: 'sarah.lin@apexengineering.com', plan: 'growth', seatsUsed: 5, meetingsUsed: 7, status: 'Active', renewal: 'Dec 1, 2026', createdAt: '2026-06-02' },
+  { id: 'ten_002', name: 'BioMedix Surgical Devices', adminName: 'Claire Dupont', adminEmail: 'claire.dupont@biomedix.com', plan: 'enterprise', seatsUsed: 38, meetingsUsed: 148, status: 'Active', renewal: 'Jan 15, 2027', createdAt: '2026-01-15' },
+  { id: 'ten_003', name: 'VoltDrive Mobility AG', adminName: 'Henrik Larsson', adminEmail: 'henrik.larsson@voltdrive.com', plan: 'growth', seatsUsed: 12, meetingsUsed: 42, status: 'Active', renewal: 'Nov 30, 2026', createdAt: '2026-05-30' },
+  { id: 'ten_004', name: 'Nordic Marine Defense AS', adminName: 'Gunnar Lindholm', adminEmail: 'gunnar@nordicmarine.no', plan: 'free', seatsUsed: 2, meetingsUsed: 10, status: 'Active', renewal: 'Perpetual', createdAt: '2026-09-11' },
+  { id: 'ten_005', name: 'Bavaria Gear Systems GmbH', adminName: 'Hans Keller', adminEmail: 'hans.keller@bavariagear.de', plan: 'starter', seatsUsed: 4, meetingsUsed: 18, status: 'Active', renewal: 'Dec 12, 2026', createdAt: '2026-08-12' }
+];
+
+export const DEFAULT_PLATFORM_PLANS = (): PlatformPlan[] => [
+  { id: 'free', name: 'Free Evaluation', priceMonthly: 0, seats: 5, meetingQuota: 10, credits: 0, active: true, features: ['Manual upload only', 'All 12 cues scored', 'No CRM or Drive sync'] },
+  { id: 'starter', name: 'Starter Plan', priceMonthly: 99, seats: 10, meetingQuota: 35, credits: 100, active: true, features: ['Google Drive folder retrieval', 'Practice timed prompts', 'Custom document tagging'] },
+  { id: 'growth', name: 'Growth Plan', priceMonthly: 249, seats: 25, meetingQuota: null, credits: 500, active: true, features: ['Salesforce read-only sync', 'Live Assist extension', 'AI mock roleplay', 'Lead coaching'] },
+  { id: 'enterprise', name: 'Enterprise Plan', priceMonthly: 799, seats: null, meetingQuota: null, credits: 2500, active: true, features: ['Custom CRM write-back rules', 'Dedicated SLAs', 'Custom speech models'] }
+];
+
+export const DEFAULT_PLATFORM_LIMITS = (): PlatformLimits => ({ formats: 'MP4, MP3, TXT', maxFileSizeMb: 2048, maxDurationMin: 240, inviteExpiryHours: 48 });
+
+const activityEntry = (text: string): PlatformActivity => ({ id: `act_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, at: new Date().toISOString(), text });
 
 export const useStore = create<AppState>()(persist((set, get) => ({
   isAuthenticated: false,
@@ -491,7 +535,12 @@ export const useStore = create<AppState>()(persist((set, get) => ({
   meetings: [],
   deals: [],
   coachingPrograms: {},
+  practiceLessons: [],
   platformCues: createDefaultPlatformCues(),
+  platformTenants: DEFAULT_PLATFORM_TENANTS(),
+  platformPlans: DEFAULT_PLATFORM_PLANS(),
+  platformLimits: DEFAULT_PLATFORM_LIMITS(),
+  platformActivity: [],
   companyCues: [],
   automations: [],
   knowledgeSources: [],
@@ -535,7 +584,6 @@ export const useStore = create<AppState>()(persist((set, get) => ({
           const kept = get().meetings.filter(m => !sampleIds.has(m.id));
           patch.meetings = [...kept, ...INITIAL_MEETINGS.map(m => {
             const next = { ...m };
-            if (!crmConnected) { next.associatedDealId = undefined; next.associatedDealName = undefined; }
             if ((m.source === 'crm' && !crmConnected) || (m.source === 'drive' && !get().driveConnected)) {
               next.source = 'upload'; next.sourceDetail = undefined;
             }
@@ -546,7 +594,9 @@ export const useStore = create<AppState>()(persist((set, get) => ({
         case 'deals': {
           // Keep deals created after the sample set was loaded (synced Opportunities, drafts).
           const sampleIds = new Set(INITIAL_DEALS.map(d => d.id));
-          patch.deals = [...get().deals.filter(d => !sampleIds.has(d.id)), ...INITIAL_DEALS];
+          // Without Salesforce the sample leads are plain SellMore leads, not Opportunities.
+          const samples = crmConnected ? INITIAL_DEALS : INITIAL_DEALS.map(d => ({ ...d, source: 'draft' as const, crmId: undefined, crmSystem: undefined, rawStage: undefined }));
+          patch.deals = [...get().deals.filter(d => !sampleIds.has(d.id)), ...samples];
           break;
         }
         case 'automations': patch.automations = INITIAL_AUTOMATIONS; break;
@@ -558,6 +608,13 @@ export const useStore = create<AppState>()(persist((set, get) => ({
       }
     });
 
+    // A call can only be linked to a lead that exists.
+    if (patch.meetings) {
+      const leadIds = new Set((patch.deals ?? get().deals).map(d => d.id));
+      patch.meetings = patch.meetings.map(m => m.associatedDealId && !leadIds.has(m.associatedDealId)
+        ? { ...m, associatedDealId: undefined, associatedDealName: undefined }
+        : m);
+    }
     set({ ...patch, populated });
   },
 
@@ -639,7 +696,12 @@ export const useStore = create<AppState>()(persist((set, get) => ({
       meetings: [],
       deals: [],
       coachingPrograms: {},
+      practiceLessons: [],
       platformCues: createDefaultPlatformCues(),
+      platformTenants: DEFAULT_PLATFORM_TENANTS(),
+      platformPlans: DEFAULT_PLATFORM_PLANS(),
+      platformLimits: DEFAULT_PLATFORM_LIMITS(),
+      platformActivity: [],
       companyCues: [],
       automations: [],
       knowledgeSources: [],
@@ -822,7 +884,7 @@ export const useStore = create<AppState>()(persist((set, get) => ({
                 date: today,
                 type: 'meeting' as const,
                 title: meeting.name,
-                description: 'Call recording linked to this deal.',
+                description: 'Call recording linked to this lead.',
                 meetingId,
                 author: currentUser.name
               },
@@ -841,8 +903,8 @@ export const useStore = create<AppState>()(persist((set, get) => ({
     const { meetings, deals } = get();
     const meeting = meetings.find(m => m.id === meetingId);
     if (!meeting) return { success: false, error: 'Meeting not found.' };
-    if (meeting.associatedDealId) return { success: false, error: 'This call is already linked to a deal.' };
-    if (!dealName.trim() || !companyName.trim()) return { success: false, error: 'Enter a deal name and a company.' };
+    if (meeting.associatedDealId) return { success: false, error: 'This call is already linked to a lead.' };
+    if (!dealName.trim() || !companyName.trim()) return { success: false, error: 'Enter a lead name and a company.' };
 
     const dealId = `deal_draft_${Date.now()}`;
     const draft: DealRecord = {
@@ -868,20 +930,28 @@ export const useStore = create<AppState>()(persist((set, get) => ({
     return { success: true, dealId };
   },
 
+  addPracticeLessons: (specs: LessonSpec[]) => {
+    set(state => ({ practiceLessons: [...specs, ...state.practiceLessons] }));
+  },
+
+  removePracticeLesson: (id: string) => {
+    set(state => ({ practiceLessons: state.practiceLessons.filter(l => l.id !== id) }));
+  },
+
   generateCoachingProgram: (dealId: string) => {
     const { deals, meetings, coachingPrograms } = get();
     const deal = deals.find(d => d.id === dealId);
-    if (!deal) return { success: false, error: 'Deal not found.' };
-    if (coachingPrograms[dealId]) return { success: false, error: 'This deal already has a coaching programme.' };
+    if (!deal) return { success: false, error: 'Lead not found.' };
+    if (coachingPrograms[dealId]) return { success: false, error: 'This lead already has a coaching programme.' };
 
     const analysed = analysedCallsOf(deal, meetings);
     if (analysed.length === 0) {
-      return { success: false, error: 'Coaching is built from analysed calls. Link at least one analysed call to this deal first.' };
+      return { success: false, error: 'Coaching is built from analysed calls. Link at least one analysed call to this lead first.' };
     }
 
     const evidence = collectCoachingEvidence(analysed).slice(0, 4);
     if (evidence.length === 0) {
-      return { success: false, error: 'The analysed calls on this deal show nothing to coach on yet.' };
+      return { success: false, error: 'The analysed calls on this lead show nothing to coach on yet.' };
     }
 
     set({
@@ -907,11 +977,11 @@ export const useStore = create<AppState>()(persist((set, get) => ({
     const { deals, meetings, coachingPrograms } = get();
     const deal = deals.find(d => d.id === dealId);
     const program = coachingPrograms[dealId];
-    if (!deal || !program) return { success: false, error: 'This deal has no coaching programme to update.' };
+    if (!deal || !program) return { success: false, error: 'This lead has no coaching programme to update.' };
 
     const known = new Set(program.sourceMeetingIds ?? []);
     const newCalls = analysedCallsOf(deal, meetings).filter(m => !known.has(m.id));
-    if (newCalls.length === 0) return { success: false, error: 'There are no new analysed calls on this deal.' };
+    if (newCalls.length === 0) return { success: false, error: 'There are no new analysed calls on this lead.' };
 
     // Only points the programme does not already cover become lessons.
     const covered = (e: CoachingEvidence) =>
@@ -1039,6 +1109,124 @@ export const useStore = create<AppState>()(persist((set, get) => ({
   resetPlatformCues: () => {
     if (get().currentRole !== 'super_admin') return;
     set({ platformCues: createDefaultPlatformCues() });
+  },
+
+  /* ---------------- platform management (super admin) ---------------- */
+
+  addTenant: ({ name, adminName, adminEmail, plan }) => {
+    const { currentRole, platformTenants, platformPlans } = get();
+    if (currentRole !== 'super_admin') return { success: false, error: 'Only a Super Admin can manage tenants.' };
+    if (!name.trim() || !adminName.trim() || !adminEmail.trim()) return { success: false, error: 'Business name, administrator name and email are required.' };
+    if (!/^\S+@\S+\.\S+$/.test(adminEmail.trim())) return { success: false, error: 'Enter a valid administrator email.' };
+    if (platformTenants.some(t => t.name.toLowerCase() === name.trim().toLowerCase())) return { success: false, error: 'A tenant with this name already exists.' };
+    if (platformTenants.some(t => t.adminEmail.toLowerCase() === adminEmail.trim().toLowerCase())) return { success: false, error: 'This administrator email is already used by another tenant.' };
+    const chosen = platformPlans.find(p => p.id === plan);
+    if (!chosen || !chosen.active) return { success: false, error: 'That plan is not available.' };
+    const tenant: PlatformTenant = {
+      id: `ten_${Date.now().toString(36)}`,
+      name: name.trim(), adminName: adminName.trim(), adminEmail: adminEmail.trim(),
+      plan, seatsUsed: 1, meetingsUsed: 0, status: 'Active',
+      renewal: plan === 'free' ? 'Perpetual' : new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      createdAt: new Date().toISOString().slice(0, 10)
+    };
+    set({ platformTenants: [tenant, ...platformTenants], platformActivity: [activityEntry(`Created tenant ${tenant.name} on ${chosen.name}.`), ...get().platformActivity].slice(0, 50) });
+    return { success: true };
+  },
+
+  updateTenant: (id, patch) => {
+    if (get().currentRole !== 'super_admin') return { success: false, error: 'Only a Super Admin can manage tenants.' };
+    const tenant = get().platformTenants.find(t => t.id === id);
+    if (!tenant) return { success: false, error: 'Tenant not found.' };
+    if (patch.name !== undefined && !patch.name.trim()) return { success: false, error: 'Business name is required.' };
+    if (patch.adminEmail !== undefined && !/^\S+@\S+\.\S+$/.test(patch.adminEmail.trim())) return { success: false, error: 'Enter a valid administrator email.' };
+    if (patch.seatsUsed !== undefined && (patch.seatsUsed < 0 || !Number.isFinite(patch.seatsUsed))) return { success: false, error: 'Seats cannot be negative.' };
+    set({
+      platformTenants: get().platformTenants.map(t => t.id === id ? { ...t, ...patch, name: patch.name !== undefined ? patch.name.trim() : t.name } : t),
+      platformActivity: [activityEntry(`Updated details of ${tenant.name}.`), ...get().platformActivity].slice(0, 50)
+    });
+    return { success: true };
+  },
+
+  changeTenantPlan: (id, plan) => {
+    const { currentRole, platformTenants, platformPlans } = get();
+    if (currentRole !== 'super_admin') return { success: false, error: 'Only a Super Admin can manage tenants.' };
+    const tenant = platformTenants.find(t => t.id === id);
+    const next = platformPlans.find(p => p.id === plan);
+    if (!tenant || !next) return { success: false, error: 'Tenant or plan not found.' };
+    if (!next.active && tenant.plan !== plan) return { success: false, error: `${next.name} is switched off and cannot be assigned.` };
+    if (next.seats !== null && tenant.seatsUsed > next.seats) return { success: false, error: `${tenant.name} uses ${tenant.seatsUsed} seats, more than the ${next.seats} that ${next.name} allows.` };
+    set({
+      platformTenants: platformTenants.map(t => t.id === id ? { ...t, plan, renewal: plan === 'free' ? 'Perpetual' : (t.renewal === 'Perpetual' ? new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : t.renewal) } : t),
+      platformActivity: [activityEntry(`Moved ${tenant.name} to ${next.name}.`), ...get().platformActivity].slice(0, 50)
+    });
+    return { success: true };
+  },
+
+  setTenantStatus: (id, status) => {
+    if (get().currentRole !== 'super_admin') return { success: false, error: 'Only a Super Admin can manage tenants.' };
+    const tenant = get().platformTenants.find(t => t.id === id);
+    if (!tenant) return { success: false, error: 'Tenant not found.' };
+    set({
+      platformTenants: get().platformTenants.map(t => t.id === id ? { ...t, status } : t),
+      platformActivity: [activityEntry(`${status === 'Suspended' ? 'Suspended' : 'Reactivated'} ${tenant.name}.`), ...get().platformActivity].slice(0, 50)
+    });
+    return { success: true };
+  },
+
+  deleteTenant: (id) => {
+    if (get().currentRole !== 'super_admin') return { success: false, error: 'Only a Super Admin can manage tenants.' };
+    const tenant = get().platformTenants.find(t => t.id === id);
+    if (!tenant) return { success: false, error: 'Tenant not found.' };
+    set({
+      platformTenants: get().platformTenants.filter(t => t.id !== id),
+      platformActivity: [activityEntry(`Deleted tenant ${tenant.name}.`), ...get().platformActivity].slice(0, 50)
+    });
+    return { success: true };
+  },
+
+  updatePlatformPlan: (id, patch) => {
+    const { currentRole, platformPlans, platformTenants } = get();
+    if (currentRole !== 'super_admin') return { success: false, error: 'Only a Super Admin can change plans.' };
+    const plan = platformPlans.find(p => p.id === id);
+    if (!plan) return { success: false, error: 'Plan not found.' };
+    if (patch.name !== undefined && !patch.name.trim()) return { success: false, error: 'Plan name is required.' };
+    if (patch.priceMonthly !== undefined && (!(patch.priceMonthly >= 0) || !Number.isFinite(patch.priceMonthly))) return { success: false, error: 'Price must be 0 or more.' };
+    if (patch.seats != null && !(patch.seats >= 1)) return { success: false, error: 'Seats must be at least 1, or unlimited.' };
+    if (patch.meetingQuota != null && !(patch.meetingQuota >= 1)) return { success: false, error: 'Meeting quota must be at least 1, or unlimited.' };
+    if (patch.credits !== undefined && !(patch.credits >= 0)) return { success: false, error: 'Credits must be 0 or more.' };
+    if (patch.active === false) {
+      if (id === 'free') return { success: false, error: 'The Free plan cannot be switched off.' };
+      const using = platformTenants.filter(t => t.plan === id).length;
+      if (using) return { success: false, error: `${using} tenant${using === 1 ? ' is' : 's are'} on ${plan.name}. Move them to another plan first.` };
+    }
+    if (patch.seats !== undefined && patch.seats !== null) {
+      const over = platformTenants.filter(t => t.plan === id && t.seatsUsed > (patch.seats as number));
+      if (over.length) return { success: false, error: `${over[0].name} already uses ${over[0].seatsUsed} seats. Lower the seat limit only below what tenants use after moving them.` };
+    }
+    set({
+      platformPlans: platformPlans.map(p => p.id === id ? { ...p, ...patch, name: patch.name !== undefined ? patch.name.trim() : p.name } : p),
+      // The demo workspace's free-plan meeting cap follows the Free plan's quota.
+      ...(id === 'free' && patch.meetingQuota ? { freeMeetingQuota: patch.meetingQuota } : {}),
+      platformActivity: [activityEntry(`Updated ${plan.name}.`), ...get().platformActivity].slice(0, 50)
+    });
+    return { success: true };
+  },
+
+  updatePlatformLimits: (limits) => {
+    if (get().currentRole !== 'super_admin') return { success: false, error: 'Only a Super Admin can change platform limits.' };
+    const formats = limits.formats.split(',').map(f => f.trim().toUpperCase()).filter(Boolean);
+    const allowed = ['MP4', 'MP3', 'TXT'];
+    if (!formats.length) return { success: false, error: 'Keep at least one file format.' };
+    const bad = formats.filter(f => !allowed.includes(f));
+    if (bad.length) return { success: false, error: `${bad.join(', ')} cannot be processed yet. Supported formats: MP4, MP3, TXT.` };
+    if (!(limits.maxFileSizeMb >= 1)) return { success: false, error: 'Maximum file size must be at least 1 MB.' };
+    if (!(limits.maxDurationMin >= 1)) return { success: false, error: 'Maximum call duration must be at least 1 minute.' };
+    if (!(limits.inviteExpiryHours >= 1)) return { success: false, error: 'Invitation expiry must be at least 1 hour.' };
+    set({
+      platformLimits: { ...limits, formats: Array.from(new Set(formats)).join(', ') },
+      platformActivity: [activityEntry('Updated platform upload limits.'), ...get().platformActivity].slice(0, 50)
+    });
+    return { success: true };
   },
 
   saveCompanyCue: (input) => {
@@ -1211,7 +1399,7 @@ export const useStore = create<AppState>()(persist((set, get) => ({
       crmOrgName: SALESFORCE_ORG_NAME,
       crmSyncStatus: 'synced',
       crmLastSync: 'Just now',
-      crmLastSyncResult: 'Connected. Click Sync now to import recordings and the deals they belong to.'
+      crmLastSyncResult: 'Connected. Click Sync now to import recordings and the leads they belong to.'
     });
   },
 

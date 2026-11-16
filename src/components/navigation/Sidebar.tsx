@@ -91,9 +91,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           title: 'Assigned Team Scope',
           items: [
             { label: 'Assigned Reps', to: '/manager/team', icon: Users },
-            { label: 'Team Deals', to: '/manager/deals', icon: Briefcase, lockedOnFree: true, crm: true },
-            { label: 'Meetings & Analysis', to: '/manager/meetings', icon: Video },
-            { label: 'Deal Coaching (Manager)', to: '/manager/deal-coaching', icon: GraduationCap, lockedOnFree: true, crm: true }
+            { label: 'Team Leads', to: '/manager/leads', icon: Briefcase, lockedOnFree: true },
+            { label: 'Meetings & Analysis', to: '/manager/meetings', icon: Video }
           ]
         },
         {
@@ -131,11 +130,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {
           title: 'My Sales Pipeline',
           items: [
-            { label: 'My Deals', to: '/sales/my-deals', icon: Briefcase, lockedOnFree: true, crm: true },
-            { label: 'Deal Workspace', to: '/sales/deals', icon: Briefcase, lockedOnFree: true, crm: true },
             { label: 'Meeting Library', to: '/sales/meetings', icon: Video },
-            { label: 'Deal Assistance', to: '/sales/deal-assistance', icon: HelpCircle, lockedOnFree: true, crm: true },
-            { label: 'Deal Coaching (Rep)', to: '/sales/deal-coaching', icon: GraduationCap, lockedOnFree: true, crm: true }
+            { label: 'Lead Workspace', to: '/sales/leads', icon: Briefcase, lockedOnFree: true }
           ]
         },
         {
@@ -169,9 +165,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         title: 'Analyse & Operations',
         items: [
           { label: 'Meeting Analyse / Library', to: '/admin/meetings', icon: Video },
-          { label: 'Deal Workspace', to: '/admin/deals', icon: Briefcase, lockedOnFree: true, crm: true },
-          { label: 'Deal Assistance', to: '/admin/deal-assistance', icon: HelpCircle, lockedOnFree: true, crm: true },
-          { label: 'Deal Coaching', to: '/admin/deal-coaching', icon: GraduationCap, lockedOnFree: true, crm: true },
+          { label: 'Lead Workspace', to: '/admin/leads', icon: Briefcase, lockedOnFree: true },
         ]
       },
       {

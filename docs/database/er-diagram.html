@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SellMore Database Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap">
+<style>
+/* Layout: toolbar, then a scrollable diagram canvas beside a detail panel, then role access and design notes. */
+:root{
+  --bg:#f3f5f9; --surface:#ffffff; --surface2:#eef1f7; --fg:#101828; --muted:#5b6679; --line:#d5dbe6; --link:#8a95aa; --linkon:#1d4ed8;
+  --pk:#b45309; --pkbg:#fef3c7; --fk:#1d4ed8; --fkbg:#dbeafe; --uq:#6d28d9; --uqbg:#ede9fe; --accent:#1d4ed8;
+  --d-platform:#7c3aed; --d-identity:#2563eb; --d-billing:#0d9488; --d-integrations:#0891b2; --d-leads:#d97706; --d-meetings:#dc2626; --d-cues:#65a30d; --d-practice:#db2777; --d-ai:#475569;
+  --font-ui:'Inter',system-ui,sans-serif; --font-head:'Space Grotesk','Inter',system-ui,sans-serif; --font-mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0c111b; --surface:#141b29; --surface2:#1b2434; --fg:#e6ebf4; --muted:#93a0b6; --line:#2a3447; --link:#4a5873; --linkon:#7aa2ff;
+  --pk:#fbbf24; --pkbg:#3a2c0a; --fk:#8fb2ff; --fkbg:#1a2a52; --uq:#c4b0ff; --uqbg:#2a2050; --accent:#7aa2ff;
+  --d-platform:#a78bfa; --d-identity:#60a5fa; --d-billing:#2dd4bf; --d-integrations:#22d3ee; --d-leads:#fbbf24; --d-meetings:#f87171; --d-cues:#a3e635; --d-practice:#f472b6; --d-ai:#94a3b8; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0c111b; --surface:#141b29; --surface2:#1b2434; --fg:#e6ebf4; --muted:#93a0b6; --line:#2a3447; --link:#4a5873; --linkon:#7aa2ff;
+  --pk:#fbbf24; --pkbg:#3a2c0a; --fk:#8fb2ff; --fkbg:#1a2a52; --uq:#c4b0ff; --uqbg:#2a2050; --accent:#7aa2ff;
+  --d-platform:#a78bfa; --d-identity:#60a5fa; --d-billing:#2dd4bf; --d-integrations:#22d3ee; --d-leads:#fbbf24; --d-meetings:#f87171; --d-cues:#a3e635; --d-practice:#f472b6; --d-ai:#94a3b8; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:14px;line-height:1.5;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px 56px}
+.wrap{max-width:1500px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+h1,h2,h3{font-family:var(--font-head);letter-spacing:-.01em;text-wrap:balance;margin:0}
+h1{font-size:30px;line-height:1.15}
+h2{font-size:20px}
+p{margin:0}
+.lede{color:var(--muted);max-width:70ch;margin-top:6px}
+.stats{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:14px;font-variant-numeric:tabular-nums}
+.stats b{font-family:var(--font-head);font-size:22px;margin-right:6px}
+.stats span{color:var(--muted)}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:5px 11px;border-radius:999px;font:500 12.5px var(--font-ui);cursor:pointer}
+.chip i{width:9px;height:9px;border-radius:50%;background:var(--c)}
+.chip[aria-pressed="false"]{opacity:.45}
+.chip:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input[type=search]{border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:6px 12px;border-radius:8px;font:13px var(--font-ui);min-width:200px}
+.tool{border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:8px;padding:5px 11px;font:500 13px var(--font-ui);cursor:pointer}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--muted);font-size:12.5px;align-items:center}
+.badge{font:600 9.5px var(--font-mono);padding:1px 5px;border-radius:4px;letter-spacing:.03em}
+.b-pk{background:var(--pkbg);color:var(--pk)} .b-fk{background:var(--fkbg);color:var(--fk)} .b-uq{background:var(--uqbg);color:var(--uq)}
+.main{display:flex;gap:16px;align-items:stretch}
+.scroller{flex:1;min-width:0;height:min(78vh,900px);overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface);background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
+.sizer{position:relative}
+.canvas{position:absolute;left:0;top:0;transform-origin:0 0}
+svg.links{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.link{fill:none;stroke:var(--link);stroke-width:1.3;opacity:.55;transition:opacity .15s}
+.link.on{stroke:var(--linkon);stroke-width:2.2;opacity:1}
+.link.off{opacity:.07}
+.tbl{position:absolute;width:270px;background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;transition:opacity .15s,box-shadow .15s;font-family:var(--font-mono);font-size:11.5px}
+.tbl:hover{box-shadow:0 4px 18px rgb(0 0 0 / .14)}
+.tbl.sel{box-shadow:0 0 0 2px var(--accent)}
+.tbl.dim{opacity:.18}
+.tbl h3{font:600 13px var(--font-head);padding:0 11px;height:30px;display:flex;align-items:center;gap:8px;background:color-mix(in srgb,var(--dc) 20%,var(--surface));border-bottom:1px solid var(--line)}
+.tbl h3 i{width:8px;height:8px;border-radius:50%;background:var(--dc);flex:none}
+.row{height:19px;display:flex;align-items:center;gap:6px;padding:0 10px}
+.row .k{width:22px;flex:none;display:flex;gap:2px}
+.row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .ty{color:var(--muted);font-size:10.5px}
+.row.hl{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.panel{width:330px;flex:none;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:16px;overflow:auto;height:min(78vh,900px);display:flex;flex-direction:column;gap:12px}
+.panel h3{font-size:18px}
+.panel .dom{font-size:12px;color:var(--muted)}
+.panel ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:12.5px}
+.panel li{display:flex;gap:6px;flex-wrap:wrap;align-items:baseline}
+.panel code{font-family:var(--font-mono);font-size:11.5px}
+.panel .sub{font:600 11px var(--font-ui);text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-top:4px}
+.panel button.go{all:unset;cursor:pointer;color:var(--accent);font-family:var(--font-mono);font-size:11.5px}
+.panel button.go:hover{text-decoration:underline}
+.empty{color:var(--muted);font-size:13px}
+.roles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.role{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:8px}
+.role h3{font-size:16px}
+.role .scope{font:500 12px var(--font-mono);color:var(--accent);background:var(--surface2);padding:6px 8px;border-radius:6px}
+.role p{font-size:13px;color:var(--muted)}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:760px;font-size:13px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--surface2);font:600 12px var(--font-ui);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+tr:last-child td{border-bottom:0}
+td:first-child{font-weight:600}
+.no{color:var(--muted)}
+.notes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.note{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.note h3{font-size:15px;margin-bottom:4px}
+.note p{font-size:13px;color:var(--muted)}
+.note code{font-family:var(--font-mono);font-size:12px;color:var(--fg)}
+@media (max-width:1100px){.main{flex-direction:column}.panel{width:auto;height:auto;max-height:420px}.roles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){.roles,.notes{grid-template-columns:minmax(0,1fr)}h1{font-size:25px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+</head><body><div class="wrap">
+  <header>
+    <h1>SellMore database map</h1>
+    <p class="lede">Every table the product needs for all four roles, with primary keys, foreign keys and how they connect. Click a table to follow its relations. The matching SQL is in <code>docs/database/schema.sql</code>.</p>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <div class="bar" id="chips" role="group" aria-label="Filter by area"></div>
+  <div class="bar">
+    <input type="search" id="q" placeholder="Find a table or column" aria-label="Find a table or column">
+    <button class="tool" id="zout" aria-label="Zoom out">&minus;</button>
+    <button class="tool" id="zin" aria-label="Zoom in">+</button>
+    <button class="tool" id="zfit">Fit width</button>
+    <button class="tool" id="clear">Clear selection</button>
+    <div class="legend"><span><span class="badge b-pk">PK</span> primary key</span><span><span class="badge b-fk">FK</span> foreign key</span><span><span class="badge b-uq">UQ</span> unique</span><span>name<b>?</b> = may be empty</span><span>Line: dot on the many side, bar on the one side</span></div>
+  </div>
+
+  <div class="main">
+    <div class="scroller" id="scroller"><div class="sizer" id="sizer"><div class="canvas" id="canvas"><svg class="links" id="links"></svg></div></div></div>
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </div>
+
+  <section>
+    <h2>What each role can reach</h2>
+    <p class="lede" style="margin-bottom:12px">Every business table carries <code>tenant_id</code>, and the database itself (row level security) checks the role on every query. A rep's team is never stored twice: it comes from <code>users.manager_id</code>.</p>
+    <div class="roles">
+      <div class="role"><h3>Super admin</h3><div class="scope">users.tenant_id IS NULL</div><p>Runs the platform: plans, limits, default cues, tenants. Sees no tenant data unless a support session is opened, and each one is written to the audit log.</p></div>
+      <div class="role"><h3>Client admin</h3><div class="scope">tenant_id = own tenant</div><p>Everything inside their company: users, integrations, documents, knowledge, billing, every lead and call.</p></div>
+      <div class="role"><h3>Manager</h3><div class="scope">rep_id / owner_id IN (users WHERE manager_id = me)</div><p>Their assigned reps' leads, calls, lessons and mock meetings. Can build lessons for a rep and leave feedback.</p></div>
+      <div class="role"><h3>Sales rep</h3><div class="scope">rep_id / owner_id = me</div><p>Their own leads, calls, lessons, mock meetings and chats. Cannot see colleagues' data.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Area</th><th>Super admin</th><th>Client admin</th><th>Manager</th><th>Sales rep</th></tr></thead>
+        <tbody>
+          <tr><td>Plans, limits, audit log</td><td>Manage</td><td>Read own plan</td><td class="no">None</td><td class="no">None</td></tr>
+          <tr><td>Tenants and people</td><td>Manage all tenants</td><td>Manage own company's users and invites</td><td>Read own team</td><td>Own profile</td></tr>
+          <tr><td>Billing and credits</td><td>Manage</td><td>Manage own</td><td class="no">None</td><td class="no">None</td></tr>
+          <tr><td>Integrations</td><td class="no">None</td><td>Manage</td><td class="no">None</td><td class="no">None</td></tr>
+          <tr><td>Leads and stakeholders</td><td class="no">None</td><td>All in company</td><td>Assigned reps' leads</td><td>Own leads</td></tr>
+          <tr><td>Meetings and analysis</td><td class="no">None</td><td>All in company</td><td>Assigned reps' calls</td><td>Own calls</td></tr>
+          <tr><td>Cues</td><td>Manage platform defaults</td><td>Company overrides and custom cues</td><td>Read</td><td>Read</td></tr>
+          <tr><td>Knowledge base and documents</td><td class="no">None</td><td>Manage</td><td>Read</td><td>Read</td></tr>
+          <tr><td>Practice lessons and feedback</td><td class="no">None</td><td>All</td><td>Create for assigned reps, give feedback</td><td>Own lessons and attempts</td></tr>
+          <tr><td>Mock meetings and Live Assist</td><td class="no">None</td><td>All</td><td>Assigned reps'</td><td>Own</td></tr>
+          <tr><td>Automations</td><td class="no">None</td><td>Manage</td><td>Use</td><td>Use</td></tr>
+          <tr><td>AI chat</td><td class="no">None</td><td>Own threads</td><td>Own threads</td><td>Own threads</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Design choices</h2>
+    <div class="notes" style="margin-top:12px">
+      <div class="note"><h3>One company boundary</h3><p><code>tenant_id</code> sits on every business table, so one query filter (and one database policy) keeps companies apart. Only super admins have no tenant.</p></div>
+      <div class="note"><h3>A call without a lead</h3><p><code>meetings.lead_id</code> may be empty. Linking an orphan call to a new lead only sets that column. Leads typed in by hand use <code>source = draft</code> and leave the CRM columns empty.</p></div>
+      <div class="note"><h3>Cues: defaults and overrides</h3><p>Platform defaults have no <code>tenant_id</code>. A company's replacement points back through <code>overrides_cue_id</code>. Calls score against the cue row that was in force, so history stays true.</p></div>
+      <div class="note"><h3>Lessons store the cues, not the script</h3><p>A lesson is a title plus its cue set (<code>practice_lesson_cues</code>) and where it came from. The conversation is rebuilt from templates, so improving a template improves every lesson.</p></div>
+      <div class="note"><h3>Calculated, not stored</h3><p>A manager's team, a lead's call count, a cue average, a tenant's seats and meetings used, and a source's citation count are all queries. Storing them invites numbers that disagree.</p></div>
+      <div class="note"><h3>Not in this map yet</h3><p>The older per-lead coaching programmes are replaced by practice lessons. Real file storage, speech-to-text jobs and a login provider are services around the database, not tables.</p></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const DATA = {"domains": {"platform": "Platform (super admin)", "identity": "Tenants & people", "billing": "Billing & credits", "integrations": "Integrations", "leads": "Leads", "meetings": "Meetings & analysis", "cues": "Cues & knowledge", "practice": "Practice & coaching", "ai": "Automation & AI"}, "tables": [{"name": "plans", "domain": "platform", "cols": [{"n": "id", "t": "text", "pk": true, "fk": null, "null": false, "uq": false, "note": "free | starter | growth | enterprise"}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "price_monthly", "t": "numeric(12,2)", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "seat_limit", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": "null = unlimited"}, {"n": "meeting_quota", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": "null = unlimited"}, {"n": "monthly_credits", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "active", "t": "boolean", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "plan_features", "domain": "platform", "cols": [{"n": "plan_id", "t": "text", "pk": true, "fk": "plans.id", "null": false, "uq": false, "note": ""}, {"n": "feature_key", "t": "text", "pk": true, "fk": null, "null": false, "uq": false, "note": "e.g. live_assist, crm_sync, mock_meetings"}], "uniques": []}, {"name": "platform_limits", "domain": "platform", "cols": [{"n": "id", "t": "int", "pk": true, "fk": null, "null": false, "uq": false, "note": "always 1 (single row)"}, {"n": "formats", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "MP4, MP3, TXT"}, {"n": "max_file_size_mb", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "max_duration_min", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "invite_expiry_hours", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "updated_by", "t": "uuid", "pk": false, "fk": "users.id", "null": true, "uq": false, "note": ""}, {"n": "updated_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "platform_audit_log", "domain": "platform", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "actor_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": true, "uq": false, "note": ""}, {"n": "action", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "detail", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "tenants", "domain": "identity", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": true, "note": ""}, {"n": "plan_id", "t": "text", "pk": false, "fk": "plans.id", "null": false, "uq": false, "note": ""}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:active|suspended"}, {"n": "renewal_date", "t": "date", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "credit_balance", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "notes", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "users", "domain": "identity", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": true, "uq": false, "note": "null only for super_admin"}, {"n": "manager_id", "t": "uuid", "pk": false, "fk": "users.id", "null": true, "uq": false, "note": "reps only: their one manager"}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "email", "t": "text", "pk": false, "fk": null, "null": false, "uq": true, "note": ""}, {"n": "role", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:super_admin|client_admin|manager|sales_rep"}, {"n": "title", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:active|inactive"}, {"n": "last_login_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "invitations", "domain": "identity", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "email", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "role", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:manager|sales_rep"}, {"n": "manager_id", "t": "uuid", "pk": false, "fk": "users.id", "null": true, "uq": false, "note": ""}, {"n": "invited_by", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:pending|accepted|expired"}, {"n": "expires_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "notifications", "domain": "identity", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "user_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "type", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "body", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "link", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "read_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "credit_transactions", "domain": "billing", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "user_id", "t": "uuid", "pk": false, "fk": "users.id", "null": true, "uq": false, "note": ""}, {"n": "activity", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "credits_consumed", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "balance_after", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "invoices", "domain": "billing", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "amount", "t": "numeric(12,2)", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "purpose", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:paid|processing|failed"}, {"n": "issued_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "pdf_url", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}], "uniques": []}, {"name": "integrations", "domain": "integrations", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "type", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:crm|drive"}, {"n": "provider", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "salesforce | google_drive"}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:connected|disconnected|error"}, {"n": "org_name", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "folder", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "sync_interval", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "last_sync_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "last_sync_result", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "connected_by", "t": "uuid", "pk": false, "fk": "users.id", "null": true, "uq": false, "note": ""}], "uniques": [["tenant_id", "type"]]}, {"name": "leads", "domain": "leads", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "owner_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "company_name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "stage", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:Discovery|Technical Review|Commercial Proposal|Negotiation|Closed Won|Closed Lost"}, {"n": "source", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:crm|draft"}, {"n": "crm_system", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "crm_id", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": "Salesforce Opportunity id"}, {"n": "raw_stage", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "owner_crm_id", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "amount", "t": "numeric(12,2)", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "close_date", "t": "date", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "next_meeting_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "last_meeting_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "crm_last_synced_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": [["tenant_id", "crm_id"]]}, {"name": "lead_stakeholders", "domain": "leads", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "lead_id", "t": "uuid", "pk": false, "fk": "leads.id", "null": false, "uq": false, "note": ""}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "role", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "company", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "sentiment", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:Champion|Neutral|Skeptic|Decision Maker"}, {"n": "last_spoke_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}], "uniques": []}, {"name": "lead_timeline_events", "domain": "leads", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "lead_id", "t": "uuid", "pk": false, "fk": "leads.id", "null": false, "uq": false, "note": ""}, {"n": "meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": true, "uq": false, "note": ""}, {"n": "author_id", "t": "uuid", "pk": false, "fk": "users.id", "null": true, "uq": false, "note": ""}, {"n": "type", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:meeting|email|stage_change|note"}, {"n": "title", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "description", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "occurred_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "lead_risks", "domain": "leads", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "lead_id", "t": "uuid", "pk": false, "fk": "leads.id", "null": false, "uq": false, "note": ""}, {"n": "text", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "detected_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "resolved_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}], "uniques": []}, {"name": "meetings", "domain": "meetings", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "rep_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "lead_id", "t": "uuid", "pk": false, "fk": "leads.id", "null": true, "uq": false, "note": "null = call without a lead"}, {"n": "integration_id", "t": "uuid", "pk": false, "fk": "integrations.id", "null": true, "uq": false, "note": "where it was fetched from"}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "uploaded_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "duration_sec", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "processing_status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:processing|analysed|failed"}, {"n": "source", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:upload|crm|drive"}, {"n": "source_detail", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "crm_activity_id", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": "blocks duplicate imports"}, {"n": "crm_opportunity_id", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "file_format", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": "enum:MP4|MP3|TXT"}, {"n": "file_size_bytes", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "storage_key", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "overall_score", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": "0-100"}, {"n": "summary", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}], "uniques": [["tenant_id", "crm_activity_id"]]}, {"name": "meeting_insights", "domain": "meetings", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": false, "uq": false, "note": ""}, {"n": "kind", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:went_well|struggled|could_be_better|next_step"}, {"n": "body", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "position", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "meeting_cue_scores", "domain": "meetings", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": false, "uq": false, "note": ""}, {"n": "cue_id", "t": "uuid", "pk": false, "fk": "cues.id", "null": false, "uq": false, "note": ""}, {"n": "score", "t": "numeric(12,2)", "pk": false, "fk": null, "null": true, "uq": false, "note": "0-5"}, {"n": "is_assessable", "t": "boolean", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "observation", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "improvement", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "evidence", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "severity", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": "enum:critical|warning|positive"}], "uniques": [["meeting_id", "cue_id"]]}, {"name": "meeting_objections", "domain": "meetings", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": false, "uq": false, "note": ""}, {"n": "at_ms", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "objection", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "rep_response", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:Resolved|Partially Resolved|Unresolved"}, {"n": "stronger_response", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}], "uniques": []}, {"name": "transcript_segments", "domain": "meetings", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": false, "uq": false, "note": ""}, {"n": "speaker", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "speaker_role", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:rep|prospect"}, {"n": "start_ms", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "text", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "cues", "domain": "cues", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": true, "uq": false, "note": "null = platform default"}, {"n": "code", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": "1-12 on platform defaults"}, {"n": "overrides_cue_id", "t": "uuid", "pk": false, "fk": "cues.id", "null": true, "uq": false, "note": "company copy replacing a default"}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "category", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "description", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "instructions", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "enabled", "t": "boolean", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "updated_by", "t": "uuid", "pk": false, "fk": "users.id", "null": true, "uq": false, "note": ""}, {"n": "updated_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "knowledge_sources", "domain": "cues", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "created_by", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "type", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:PDF|DOCX|TXT|Website|YouTube|Manual QA"}, {"n": "size_or_url", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:indexed|processing|failed"}, {"n": "assessment_tag", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "available_to_ai", "t": "boolean", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "company_documents", "domain": "cues", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "uploaded_by", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "size_bytes", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "storage_key", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tagged_cue_id", "t": "uuid", "pk": false, "fk": "cues.id", "null": true, "uq": false, "note": "which cue it grounds"}, {"n": "considered", "t": "boolean", "pk": false, "fk": null, "null": false, "uq": false, "note": "used in scoring"}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:ready|processing"}, {"n": "uploaded_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "knowledge_citations", "domain": "cues", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "source_id", "t": "uuid", "pk": false, "fk": "knowledge_sources.id", "null": false, "uq": false, "note": ""}, {"n": "user_id", "t": "uuid", "pk": false, "fk": "users.id", "null": true, "uq": false, "note": ""}, {"n": "meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": true, "uq": false, "note": ""}, {"n": "used_by", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:ask_ai|ai_chat|live_assist|mock|practice"}, {"n": "cited_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "practice_lessons", "domain": "practice", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "owner_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": "rep who practises"}, {"n": "created_by", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": "rep or manager"}, {"n": "meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": true, "uq": false, "note": ""}, {"n": "lead_id", "t": "uuid", "pk": false, "fk": "leads.id", "null": true, "uq": false, "note": ""}, {"n": "origin", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:meeting|lead"}, {"n": "method", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:checklist|ai"}, {"n": "title", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "context", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "practice_lesson_cues", "domain": "practice", "cols": [{"n": "lesson_id", "t": "uuid", "pk": true, "fk": "practice_lessons.id", "null": false, "uq": false, "note": ""}, {"n": "cue_id", "t": "uuid", "pk": true, "fk": "cues.id", "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "practice_attempts", "domain": "practice", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "lesson_id", "t": "uuid", "pk": false, "fk": "practice_lessons.id", "null": false, "uq": false, "note": ""}, {"n": "user_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "turn_no", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "response", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "score", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": "0-100"}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "lesson_feedback", "domain": "practice", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "lesson_id", "t": "uuid", "pk": false, "fk": "practice_lessons.id", "null": false, "uq": false, "note": ""}, {"n": "manager_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "feedback", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "mock_meetings", "domain": "practice", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "rep_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "source_meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": true, "uq": false, "note": "must be an analysed call"}, {"n": "buyer_name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "buyer_role", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "roleplay_type", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "domain", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "started_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "duration_sec", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "score", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": "0-100"}, {"n": "summary", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "talk_listen_ratio", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "fillers_per_min", "t": "numeric(12,2)", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "words_per_min", "t": "int", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "longest_monologue", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "rescore_status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:idle|processing|rescored"}], "uniques": []}, {"name": "mock_meeting_focus_cues", "domain": "practice", "cols": [{"n": "mock_meeting_id", "t": "uuid", "pk": true, "fk": "mock_meetings.id", "null": false, "uq": false, "note": ""}, {"n": "cue_id", "t": "uuid", "pk": true, "fk": "cues.id", "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "mock_meeting_points", "domain": "practice", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "mock_meeting_id", "t": "uuid", "pk": false, "fk": "mock_meetings.id", "null": false, "uq": false, "note": ""}, {"n": "kind", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:went_well|to_improve"}, {"n": "body", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "live_assist_sessions", "domain": "practice", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "user_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": true, "uq": false, "note": "analysed call it was prepared from"}, {"n": "started_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "ended_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "notes", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:active|ended"}], "uniques": []}, {"name": "automations", "domain": "ai", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "created_by", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "name", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "description", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "trigger_event", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "condition", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "action", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "category", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:Summary|Prompt|Email|Diagnostic"}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:Active|Draft|Paused"}, {"n": "runs_count", "t": "int", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "last_run_at", "t": "timestamptz", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}], "uniques": []}, {"name": "automation_runs", "domain": "ai", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "automation_id", "t": "uuid", "pk": false, "fk": "automations.id", "null": false, "uq": false, "note": ""}, {"n": "meeting_id", "t": "uuid", "pk": false, "fk": "meetings.id", "null": true, "uq": false, "note": ""}, {"n": "lead_id", "t": "uuid", "pk": false, "fk": "leads.id", "null": true, "uq": false, "note": ""}, {"n": "status", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:success|failed"}, {"n": "output", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "ran_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "chat_threads", "domain": "ai", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "tenant_id", "t": "uuid", "pk": false, "fk": "tenants.id", "null": false, "uq": false, "note": ""}, {"n": "user_id", "t": "uuid", "pk": false, "fk": "users.id", "null": false, "uq": false, "note": ""}, {"n": "lead_id", "t": "uuid", "pk": false, "fk": "leads.id", "null": true, "uq": false, "note": "set when asked from a lead"}, {"n": "title", "t": "text", "pk": false, "fk": null, "null": true, "uq": false, "note": ""}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}, {"name": "chat_messages", "domain": "ai", "cols": [{"n": "id", "t": "uuid", "pk": true, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "thread_id", "t": "uuid", "pk": false, "fk": "chat_threads.id", "null": false, "uq": false, "note": ""}, {"n": "role", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": "enum:user|assistant"}, {"n": "body", "t": "text", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}, {"n": "citations", "t": "jsonb", "pk": false, "fk": null, "null": true, "uq": false, "note": "knowledge source ids"}, {"n": "created_at", "t": "timestamptz", "pk": false, "fk": null, "null": false, "uq": false, "note": ""}], "uniques": []}]};
+const COL_X = {platform:0,billing:0,identity:1,integrations:1,leads:2,ai:2,meetings:3,cues:4,practice:5};
+const W=270, HEAD=30, ROW=19, GAPX=110, GAPY=34, PAD=24;
+const DOMKEYS=Object.keys(DATA.domains);
+const $=id=>document.getElementById(id);
+const byName={}; DATA.tables.forEach(t=>byName[t.name]=t);
+
+/* position tables: one lane per column, stacked in the order given */
+const laneY={};
+DATA.tables.forEach(t=>{
+  const lane=COL_X[t.domain];
+  t.x=PAD+lane*(W+GAPX); t.y=laneY[lane]??PAD; t.h=HEAD+t.cols.length*ROW+2;
+  laneY[lane]=t.y+t.h+GAPY;
+});
+const CW=PAD*2+6*W+5*GAPX, CH=Math.max(...Object.values(laneY))+PAD;
+
+const canvas=$('canvas'), svg=$('links'), sizer=$('sizer'), scroller=$('scroller');
+canvas.style.width=CW+'px'; canvas.style.height=CH+'px'; svg.setAttribute('width',CW); svg.setAttribute('height',CH);
+
+let zoom=1, selected=null, activeDomains=new Set(DOMKEYS), query='';
+function setZoom(z){zoom=Math.max(.35,Math.min(1.4,z));canvas.style.transform='scale('+zoom+')';sizer.style.width=CW*zoom+'px';sizer.style.height=CH*zoom+'px'}
+
+/* tables */
+DATA.tables.forEach(t=>{
+  const el=document.createElement('div'); el.className='tbl'; el.id='t_'+t.name; el.tabIndex=0;
+  el.style.cssText='left:'+t.x+'px;top:'+t.y+'px;--dc:var(--d-'+t.domain+')';
+  el.setAttribute('role','button'); el.setAttribute('aria-label',t.name+' table');
+  const h=document.createElement('h3'); h.innerHTML='<i></i>'+t.name; el.appendChild(h);
+  t.cols.forEach((c,i)=>{
+    const r=document.createElement('div'); r.className='row'; r.dataset.col=c.n;
+    const k=document.createElement('span'); k.className='k';
+    if(c.pk) k.innerHTML+='<span class="badge b-pk">PK</span>';
+    if(c.fk) k.innerHTML+='<span class="badge b-fk">FK</span>';
+    if(c.uq||(t.uniques||[]).some(u=>u.length===1&&u[0]===c.n)) k.innerHTML+='<span class="badge b-uq">UQ</span>';
+    const nm=document.createElement('span'); nm.className='nm'; nm.textContent=c.n+(c.null?'?':''); nm.title=c.note&&!c.note.startsWith('enum:')?c.note:'';
+    const ty=document.createElement('span'); ty.className='ty'; ty.textContent=c.t==='timestamptz'?'time':c.t==='numeric(12,2)'?'money':c.t==='boolean'?'bool':c.t;
+    r.append(k,nm,ty); el.appendChild(r);
+  });
+  el.addEventListener('click',e=>{e.stopPropagation();select(t.name)});
+  el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(t.name)}});
+  canvas.appendChild(el);
+});
+
+/* relations */
+const rels=[];
+DATA.tables.forEach(t=>t.cols.forEach((c,i)=>{ if(c.fk){const [tt,tc]=c.fk.split('.'); rels.push({from:t.name,fromCol:c.n,fromIdx:i,to:tt,toCol:tc,toIdx:byName[tt].cols.findIndex(x=>x.n===tc),optional:c.null})} }));
+function rowY(t,idx){return t.y+HEAD+idx*ROW+ROW/2}
+rels.forEach((r,n)=>{
+  const a=byName[r.from], b=byName[r.to]; const ay=rowY(a,r.fromIdx), by=rowY(b,r.toIdx);
+  let d, ax, bx, ad, bd;
+  if(a===b){ ax=a.x+W; bx=a.x+W; d=`M${ax} ${ay} C ${ax+46} ${ay}, ${bx+46} ${by}, ${bx} ${by}`; ad=1; bd=1; }
+  else if(b.x>a.x+W-1){ ax=a.x+W; bx=b.x; const m=Math.max(50,(bx-ax)/2); d=`M${ax} ${ay} C ${ax+m} ${ay}, ${bx-m} ${by}, ${bx} ${by}`; ad=1; bd=-1; }
+  else if(b.x+W<a.x+1){ ax=a.x; bx=b.x+W; const m=Math.max(50,(ax-bx)/2); d=`M${ax} ${ay} C ${ax-m} ${ay}, ${bx+m} ${by}, ${bx} ${by}`; ad=-1; bd=1; }
+  else { ax=a.x+W; bx=b.x+W; d=`M${ax} ${ay} C ${ax+58} ${ay}, ${bx+58} ${by}, ${bx} ${by}`; ad=1; bd=1; }
+  const p=document.createElementNS('http://www.w3.org/2000/svg','path'); p.setAttribute('d',d); p.setAttribute('class','link'); p.dataset.from=r.from; p.dataset.to=r.to; if(r.optional) p.setAttribute('stroke-dasharray','5 4');
+  svg.appendChild(p); r.el=p;
+  const dot=document.createElementNS('http://www.w3.org/2000/svg','circle'); dot.setAttribute('cx',ax+ad*5); dot.setAttribute('cy',ay); dot.setAttribute('r',3.2); dot.setAttribute('fill','var(--linkon)'); dot.setAttribute('class','link'); dot.style.stroke='none'; dot.dataset.from=r.from; dot.dataset.to=r.to; svg.appendChild(dot); r.dot=dot;
+  const bar=document.createElementNS('http://www.w3.org/2000/svg','path'); bar.setAttribute('d',`M${bx+bd*6} ${by-5} L${bx+bd*6} ${by+5}`); bar.setAttribute('class','link'); bar.dataset.from=r.from; bar.dataset.to=r.to; bar.style.strokeWidth=2; svg.appendChild(bar); r.bar=bar;
+});
+
+/* chips */
+const chips=$('chips');
+DOMKEYS.forEach(k=>{
+  const b=document.createElement('button'); b.className='chip'; b.style.setProperty('--c','var(--d-'+k+')'); b.setAttribute('aria-pressed','true');
+  const n=DATA.tables.filter(t=>t.domain===k).length; b.innerHTML='<i></i>'+DATA.domains[k]+' <span style="color:var(--muted)">'+n+'</span>';
+  b.addEventListener('click',()=>{ if(activeDomains.has(k)) activeDomains.delete(k); else activeDomains.add(k); b.setAttribute('aria-pressed',activeDomains.has(k)); apply(); });
+  chips.appendChild(b);
+});
+
+/* stats */
+const fkCount=rels.length;
+$('stats').innerHTML=`<div><b>${DATA.tables.length}</b><span>tables</span></div><div><b>${fkCount}</b><span>foreign keys</span></div><div><b>${DOMKEYS.length}</b><span>areas</span></div><div><b>4</b><span>roles served</span></div>`;
+
+function related(name){
+  const s=new Set([name]); rels.forEach(r=>{ if(r.from===name) s.add(r.to); if(r.to===name) s.add(r.from); }); return s;
+}
+function apply(){
+  const rel=selected?related(selected):null; const q=query.trim().toLowerCase();
+  DATA.tables.forEach(t=>{
+    const el=$('t_'+t.name);
+    const matchQ=!q||t.name.includes(q)||t.cols.some(c=>c.n.includes(q));
+    const dim=!activeDomains.has(t.domain)||!matchQ||(rel&&!rel.has(t.name));
+    el.classList.toggle('dim',dim); el.classList.toggle('sel',t.name===selected);
+    el.querySelectorAll('.row').forEach(r=>{ r.classList.toggle('hl',!!q&&r.dataset.col.includes(q)); });
+  });
+  const els=[...svg.children];
+  els.forEach(p=>{
+    const f=p.dataset.from,to=p.dataset.to;
+    const vis=activeDomains.has(byName[f].domain)&&activeDomains.has(byName[to].domain);
+    const on=selected&&(f===selected||to===selected);
+    p.classList.toggle('on',!!on); p.classList.toggle('off',!vis||(selected&&!on));
+  });
+  panel();
+}
+function select(n){ selected=(selected===n)?null:n; apply(); if(selected){ const t=byName[n]; const el=$('t_'+n); const sx=t.x*zoom, sy=t.y*zoom; scroller.scrollTo({left:Math.max(0,sx-scroller.clientWidth/2+W*zoom/2),top:Math.max(0,sy-60),behavior:'smooth'}); } }
+
+function panel(){
+  const p=$('panel');
+  if(!selected){ p.innerHTML='<h3>Pick a table</h3><p class="empty">Click any table to see its columns, what it points to and what points to it. Lines for the chosen table light up and the rest fade.</p><p class="empty">Dashed lines are optional links (the column may be empty).</p>'; return; }
+  const t=byName[selected]; const out=rels.filter(r=>r.from===selected); const inn=rels.filter(r=>r.to===selected);
+  const li=(txt)=>txt;
+  let h=`<div><h3>${t.name}</h3><div class="dom">${DATA.domains[t.domain]}</div></div>`;
+  h+='<div class="sub">Columns</div><ul>'+t.cols.map(c=>{
+    const note=c.note?(c.note.startsWith('enum:')?'one of: '+c.note.slice(5).split('|').join(', '):c.note):'';
+    return `<li>${c.pk?'<span class="badge b-pk">PK</span>':''}${c.fk?'<span class="badge b-fk">FK</span>':''}<code>${c.n}${c.null?'?':''}</code><span style="color:var(--muted)">${c.t}</span>${note?`<span style="color:var(--muted);flex-basis:100%;font-size:11.5px">${note}</span>`:''}</li>`}).join('')+'</ul>';
+  h+='<div class="sub">Points to ('+out.length+')</div>'+(out.length?'<ul>'+out.map(r=>`<li><code>${r.fromCol}</code>&rarr;<button class="go" data-go="${r.to}">${r.to}.${r.toCol}</button>${r.optional?'<span style="color:var(--muted)">optional</span>':''}</li>`).join('')+'</ul>':'<p class="empty">Nothing. This table stands alone.</p>');
+  h+='<div class="sub">Pointed to by ('+inn.length+')</div>'+(inn.length?'<ul>'+inn.map(r=>`<li><button class="go" data-go="${r.from}">${r.from}.${r.fromCol}</button></li>`).join('')+'</ul>':'<p class="empty">No table points here.</p>');
+  if((t.uniques||[]).length) h+='<div class="sub">Unique together</div><ul>'+t.uniques.map(u=>`<li><code>(${u.join(', ')})</code></li>`).join('')+'</ul>';
+  p.innerHTML=h;
+  p.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>{selected=null;select(b.dataset.go)}));
+}
+
+$('q').addEventListener('input',e=>{query=e.target.value;apply()});
+$('zin').onclick=()=>setZoom(zoom+.1); $('zout').onclick=()=>setZoom(zoom-.1);
+$('zfit').onclick=()=>{setZoom((scroller.clientWidth-4)/CW); scroller.scrollTo(0,0)};
+$('clear').onclick=()=>{selected=null;$('q').value='';query='';activeDomains=new Set(DOMKEYS);chips.querySelectorAll('.chip').forEach(c=>c.setAttribute('aria-pressed','true'));apply()};
+scroller.addEventListener('click',()=>{ if(selected){selected=null;apply()} });
+setZoom(Math.min(.75,(scroller.clientWidth-4)/CW>0.35?Math.max(.5,Math.min(.75,(scroller.clientWidth-4)/CW)):.5));
+apply();
+</script>
+
+</body></html>

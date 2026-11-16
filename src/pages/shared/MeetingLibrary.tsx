@@ -107,11 +107,9 @@ export const MeetingLibrary: React.FC = () => {
         .sort((a, b) => b.risks.length - a.risks.length)
         .slice(0, 3);
       setAiSearchInsight(
-        !crmConnected
-          ? 'Connect Salesforce to see which deals need attention.'
-          : ranked.length === 0
-            ? 'No open deals have risks right now.'
-            : 'Deals needing attention: ' + ranked.map((x, i) => `${i + 1}. ${x.deal.name}: ${x.risks[0]}`).join(' ')
+        ranked.length === 0
+            ? 'No open leads have risks right now.'
+            : 'Leads needing attention: ' + ranked.map((x, i) => `${i + 1}. ${x.deal.name}: ${x.risks[0]}`).join(' ')
       );
     }
   };
@@ -216,11 +214,11 @@ export const MeetingLibrary: React.FC = () => {
 
           <button
             onClick={() =>
-              handlePromptChipClick('Which deals need attention?')
+              handlePromptChipClick('Which leads need attention?')
             }
             className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors font-medium text-[11px] flex items-center gap-1"
           >
-            Which deals need attention?
+            Which leads need attention?
           </button>
         </div>
 
@@ -261,6 +259,7 @@ export const MeetingLibrary: React.FC = () => {
             My Meetings
           </button>
 
+          {currentRole !== 'sales_rep' && (
           <button
             onClick={() => setActiveTab('team')}
             className={`pb-1 transition-colors ${activeTab === 'team'
@@ -270,6 +269,7 @@ export const MeetingLibrary: React.FC = () => {
           >
             Team Meetings
           </button>
+          )}
         </div>
 
         <select
@@ -305,7 +305,7 @@ export const MeetingLibrary: React.FC = () => {
                 <th className="py-3 px-4">Meeting Title & Participants</th>
                 <th className="py-3 px-4">Type</th>
                 <th className="py-3 px-4">Source</th>
-                {crmConnected && <th className="py-3 px-4">Deal</th>}
+                <th className="py-3 px-4">Lead</th>
                 <th className="py-3 px-4">Score</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
@@ -316,7 +316,7 @@ export const MeetingLibrary: React.FC = () => {
                 filteredMeetings.map(meeting => {
                   const reportPath = `/${rolePrefix}/meetings/${meeting.id}`;
                   const dealPath = meeting.associatedDealId
-                    ? `/${rolePrefix}/deals/${meeting.associatedDealId}`
+                    ? `/${rolePrefix}/leads/${meeting.associatedDealId}`
                     : null;
 
                   const isAnalysed =
@@ -385,7 +385,7 @@ export const MeetingLibrary: React.FC = () => {
                             )}
 
                             <div className="text-[11px] text-slate-500 truncate mt-0.5">
-                              {meeting.representativeName}{crmConnected ? ` · ${meeting.associatedDealName || 'No deal linked'}` : ''}
+                              {meeting.representativeName} · {meeting.associatedDealName || 'No lead linked'}
                             </div>
                           </div>
                         </div>
@@ -403,8 +403,8 @@ export const MeetingLibrary: React.FC = () => {
                         <SourceBadge source={meeting.source} />
                       </td>
 
-                      {/* ASSOCIATED DEAL (only with Salesforce connected) */}
-                      {crmConnected && (
+                      {/* ASSOCIATED DEAL */}
+                      {(
                         <td className="py-3.5 px-4 whitespace-nowrap">
                           {meeting.associatedDealName && dealPath ? (
                             <Link
@@ -481,7 +481,7 @@ export const MeetingLibrary: React.FC = () => {
                 })
               ) : (
                 <tr>
-                  <td colSpan={crmConnected ? 7 : 6} className="py-12 text-center">
+                  <td colSpan={7} className="py-12 text-center">
                     <Video className="mx-auto h-8 w-8 text-slate-300" />
 
                     <p className="mt-3 text-sm font-semibold text-slate-700">
