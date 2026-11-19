@@ -112,3 +112,14 @@ BEGIN
   RETURN NEW;
 END $$;
 CREATE TRIGGER trg_media_files_retention BEFORE INSERT ON media_files FOR EACH ROW EXECUTE FUNCTION media_files_retention();
+
+-- meeting_cue_scores: evidence points at a line of the same meeting, so clicking it always lands on the right place.
+CREATE FUNCTION cue_scores_check() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.evidence_segment_id IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM transcript_segments s WHERE s.id = NEW.evidence_segment_id AND s.meeting_id = NEW.meeting_id) THEN
+    RAISE EXCEPTION 'evidence must point at a line of the same meeting' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_meeting_cue_scores_check BEFORE INSERT OR UPDATE ON meeting_cue_scores FOR EACH ROW EXECUTE FUNCTION cue_scores_check();

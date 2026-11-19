@@ -1,6 +1,6 @@
 # SellMore database
 
-PostgreSQL 15+. 51 tables, 112 foreign keys, row level security on every table.
+PostgreSQL 15+ with the `pgvector` extension (0.7 or newer). 52 tables, 115 foreign keys, row level security on every table.
 
 | File | What it is |
 |---|---|
@@ -11,7 +11,7 @@ PostgreSQL 15+. 51 tables, 112 foreign keys, row level security on every table.
 | `schema.sql` | Generated. The full schema, applied in one transaction. |
 | `er-diagram.html` | The picture, with a role access table and design notes. |
 | `RELATIONS.md` | Generated reference: every table, and every relation with its meaning, delete behaviour and same-company check. |
-| `tests/verify.sql` | 56 behaviour checks (scoping, reassignment, limits, ledgers). |
+| `tests/verify.sql` | 83 behaviour checks (scoping, reassignment, limits, ledgers, tags, vectors, retention). |
 
 ```bash
 python3 generate.py
@@ -113,7 +113,8 @@ A call to a number that is not in Salesforce never reaches Salesforce, so it nev
 - An objection points at a **buyer** line of the same meeting.
 - Credits: never negative, a retried request with the same key charges once, balance moves only through `consume_credits` / `grant_credits`.
 - `credit_transactions`, `audit_log`, `platform_audit_log`: append only.
-- Recording `retention_until` is stamped from the company's retention setting. `expire_media()` is the nightly job.
+- Recording `retention_until` is stamped from the company's retention setting. `expire_media()` is the nightly job: it hides the file, and clears the raw speech-to-text, the turn vectors and the model's raw replies that came from it. The cleaned transcript and the analysis stay.
+- Tags are lower case, at most 20 per row. Raw text is never stored on a user's chat message. Evidence and objections must point at a line of their own meeting. The same knowledge content or document file cannot be added twice in a company.
 
 **Not enforced in the database** (the API or a worker does it): the monthly meeting quota, file type and size limits (`platform_limits`), stage mapping at import time, resolving a Salesforce owner to a SellMore user by email, and refilling `monthly_credits`.
 
@@ -125,12 +126,17 @@ A call to a number that is not in Salesforce never reaches Salesforce, so it nev
 - **Secrets.** `integration_credentials` holds tokens encrypted with a KMS key (`key_version` supports rotation). Password hashes use argon2id.
 - **Backups.** Point-in-time recovery on, restore tested monthly. A hard delete of a tenant cascades through everything; use `tenants.deleted_at` for normal offboarding and purge on a schedule.
 - **Growth.** Watch `transcript_segments`, `chat_messages`, `audit_log` and `integration_events`. Partition them by month or by hash of `meeting_id` once any passes about 100 million rows. Do not partition earlier.
-- **Search.** `transcript_segments.tsv` and `knowledge_chunks.tsv` give full text search today. For semantic search, enable `pgvector` and add an `embedding vector(...)` column to `knowledge_chunks`.
+- **Search.** Two kinds. Word search: `tsv` on `transcript_segments` and `knowledge_chunks`. Search by meaning: `halfvec` vectors with HNSW indexes on `transcript_segments.embeddings`, `chat_messages.embeddings`, `knowledge_chunks.embeddings`, `company_documents.embeddings` (one vector for the whole document) and `meetings.summary_embeddings`. Tag filters use GIN indexes on `tags`.
+- **Embedding model.** The vector size is fixed in each column (`EMBED_DIM` in `schema_def.py`, now 1536). Pick the model first; to change it, change `EMBED_DIM`, regenerate, and re-embed using `embedding_model` / `embedded_at` to find stale rows. Leave `embeddings` empty for very short turns ("okay"). Never `SELECT *` from these tables in list screens.
+- **Searching one company.** An HNSW index filters by company *after* it searches, so a small company can get fewer results than asked for. For large installations use pgvector's iterative scan (`SET hnsw.iterative_scan = relaxed_order`) or a partial index per large company.
+- **Privacy.** `raw_text`, `raw_output` and embeddings are copies of call content. They follow their row's access rule, and `expire_media()` clears the call-dependent ones when the recording expires. Knowledge `raw_text` is company content and stays until the source is deleted.
 - **Seed data.** `sql/95_seed.sql` loads plans, plan features and platform limits. The 12 platform cues are exported from `createDefaultPlatformCues()` in the app; load them before the first tenant.
 - **Monitoring.** Alert on `integration_sync_runs.status = 'failed'`, meetings stuck in a non-final `processing_status` for more than an hour, and `integrations.last_sync_at` older than twice `sync_interval`.
 
 ## 7. Changes from the first design
 
-Added 15 tables: `media_files`, `crm_activities`, `crm_stage_mappings`, `integration_credentials`, `integration_sync_runs`, `integration_events`, `analysis_runs`, `coaching_programs`, `coaching_program_meetings`, `coaching_lessons`, `practice_catalog`, `knowledge_chunks`, `auth_identities`, `manager_assignments`, `audit_log`.
+Added 16 tables: `media_files`, `crm_activities`, `crm_stage_mappings`, `integration_credentials`, `integration_sync_runs`, `integration_events`, `analysis_runs`, `coaching_programs`, `coaching_program_meetings`, `coaching_lessons`, `practice_catalog`, `knowledge_chunks`, `auth_identities`, `manager_assignments`, `audit_log`, `transcript_segment_cues`.
 
 Moved file fields off `meetings` into `media_files`. Widened `processing_status` for the call flow. Added same-company keys, checks, soft delete, `updated_at`, real policies, triggers, views, grants and seed data. `lesson_feedback` and `practice_attempts` now carry `tenant_id` and the rep, so they follow the same access rule.
+
+**Text, tags and vectors.** `raw_text` on `transcript_segments`, `knowledge_sources`, `company_documents` and (assistant messages only) `chat_messages`; `raw_output` on `analysis_runs`. `tags` on `transcript_segments`, `meetings`, `chat_messages`, `knowledge_sources` and `company_documents`. Vectors on `transcript_segments`, `chat_messages`, `knowledge_chunks`, `company_documents` and `meetings` (summary). Also `meeting_objections.category`, `meeting_cue_scores.evidence_segment_id` and `transcript_segment_cues` (the cues a line mentions, which the app already keeps as `cuesMentioned`).

@@ -4,6 +4,7 @@
 -- Apply with:  psql -v ON_ERROR_STOP=1 --single-transaction -f schema.sql
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS vector;     -- pgvector: halfvec columns and HNSW indexes for search by meaning (0.7 or newer)
 
 -- Database roles. Passwords / login are granted outside this file (secrets manager).
 --   sellmore_app    the API. Subject to row level security. Cannot read tokens or password hashes.
@@ -433,6 +434,11 @@ CREATE TABLE meetings (
   match_status text CHECK (match_status IN ('matched', 'unmatched', 'ambiguous')),
   overall_score int,
   summary text,
+  language text,
+  tags text[] NOT NULL DEFAULT '{}',
+  summary_embeddings halfvec(1536),
+  embedding_model text,
+  embedded_at timestamptz,
   analysed_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
@@ -447,7 +453,9 @@ CREATE TABLE meetings (
   CHECK (overall_score IS NULL OR overall_score BETWEEN 0 AND 100),
   CHECK (source <> 'upload' OR media_file_id IS NOT NULL),
   CHECK (source <> 'crm' OR crm_activity_id IS NOT NULL),
-  CHECK (source <> 'drive' OR media_file_id IS NOT NULL)
+  CHECK (source <> 'drive' OR media_file_id IS NOT NULL),
+  CHECK (tags = lower(tags::text)::text[]),
+  CHECK (cardinality(tags) <= 20)
 );
 
 -- Leads
@@ -482,6 +490,7 @@ CREATE TABLE analysis_runs (
   input_tokens int,
   output_tokens int,
   credits_charged int NOT NULL DEFAULT 0,
+  raw_output jsonb,
   started_at timestamptz,
   finished_at timestamptz,
   error text,
@@ -516,21 +525,6 @@ CREATE TABLE cues (
 );
 
 -- Meetings & analysis
-CREATE TABLE meeting_cue_scores (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
-  cue_id uuid NOT NULL REFERENCES cues(id),
-  score numeric(12,2),
-  is_assessable boolean NOT NULL,
-  observation text,
-  improvement text,
-  evidence text,
-  severity text CHECK (severity IN ('critical', 'warning', 'positive')),
-  UNIQUE (meeting_id, cue_id),
-  CHECK (score IS NULL OR score BETWEEN 0 AND 5)
-);
-
--- Meetings & analysis
 CREATE TABLE transcript_segments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
@@ -540,8 +534,34 @@ CREATE TABLE transcript_segments (
   start_ms int NOT NULL,
   end_ms int,
   text text NOT NULL,
+  raw_text text,
+  language text,
+  asr_confidence numeric(4,3),
+  tags text[] NOT NULL DEFAULT '{}',
+  embeddings halfvec(1536),
+  embedding_model text,
+  embedded_at timestamptz,
   tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', text)) STORED,
-  UNIQUE (meeting_id, seq)
+  UNIQUE (meeting_id, seq),
+  CHECK (tags = lower(tags::text)::text[]),
+  CHECK (cardinality(tags) <= 20),
+  CHECK (asr_confidence IS NULL OR asr_confidence BETWEEN 0 AND 1)
+);
+
+-- Meetings & analysis
+CREATE TABLE meeting_cue_scores (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  cue_id uuid NOT NULL REFERENCES cues(id),
+  score numeric(12,2),
+  is_assessable boolean NOT NULL,
+  observation text,
+  improvement text,
+  evidence text,
+  evidence_segment_id uuid REFERENCES transcript_segments(id) ON DELETE SET NULL,
+  severity text CHECK (severity IN ('critical', 'warning', 'positive')),
+  UNIQUE (meeting_id, cue_id),
+  CHECK (score IS NULL OR score BETWEEN 0 AND 5)
 );
 
 -- Meetings & analysis
@@ -551,9 +571,17 @@ CREATE TABLE meeting_objections (
   segment_id uuid REFERENCES transcript_segments(id) ON DELETE SET NULL,
   at_ms int NOT NULL,
   objection text NOT NULL,
+  category text CHECK (category IN ('price', 'timing', 'authority', 'competitor', 'technical', 'risk', 'other')),
   rep_response text,
   status text NOT NULL CHECK (status IN ('Resolved', 'Partially Resolved', 'Unresolved')),
   stronger_response text
+);
+
+-- Meetings & analysis
+CREATE TABLE transcript_segment_cues (
+  segment_id uuid REFERENCES transcript_segments(id) ON DELETE CASCADE,
+  cue_id uuid REFERENCES cues(id),
+  PRIMARY KEY (segment_id, cue_id)
 );
 
 -- Cues & knowledge
@@ -567,12 +595,17 @@ CREATE TABLE knowledge_sources (
   storage_key text,
   status text NOT NULL DEFAULT 'processing' CHECK (status IN ('indexed', 'processing', 'failed')),
   assessment_tag text,
+  tags text[] NOT NULL DEFAULT '{}',
+  raw_text text,
+  content_hash text,
   available_to_ai boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
   UNIQUE (tenant_id, id),
-  FOREIGN KEY (tenant_id, created_by) REFERENCES users(tenant_id, id)
+  FOREIGN KEY (tenant_id, created_by) REFERENCES users(tenant_id, id),
+  CHECK (tags = lower(tags::text)::text[]),
+  CHECK (cardinality(tags) <= 20)
 );
 
 -- Cues & knowledge
@@ -586,13 +619,20 @@ CREATE TABLE company_documents (
   storage_key text NOT NULL,
   checksum_sha256 text,
   tagged_cue_id uuid REFERENCES cues(id) ON DELETE SET NULL,
+  tags text[] NOT NULL DEFAULT '{}',
+  raw_text text,
+  embeddings halfvec(1536),
+  embedding_model text,
+  embedded_at timestamptz,
   considered boolean NOT NULL DEFAULT true,
   status text NOT NULL DEFAULT 'processing' CHECK (status IN ('ready', 'processing')),
   uploaded_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
   UNIQUE (tenant_id, id),
-  FOREIGN KEY (tenant_id, uploaded_by) REFERENCES users(tenant_id, id)
+  FOREIGN KEY (tenant_id, uploaded_by) REFERENCES users(tenant_id, id),
+  CHECK (tags = lower(tags::text)::text[]),
+  CHECK (cardinality(tags) <= 20)
 );
 
 -- Cues & knowledge
@@ -604,6 +644,9 @@ CREATE TABLE knowledge_chunks (
   seq int NOT NULL,
   content text NOT NULL,
   token_count int,
+  embeddings halfvec(1536),
+  embedding_model text,
+  embedded_at timestamptz,
   tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
   CHECK ((source_id IS NULL) <> (document_id IS NULL))
 );
@@ -843,10 +886,19 @@ CREATE TABLE chat_messages (
   thread_id uuid NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
   role text NOT NULL CHECK (role IN ('user', 'assistant')),
   body text NOT NULL,
+  raw_text text,
   citations jsonb,
+  model text,
+  tags text[] NOT NULL DEFAULT '{}',
+  embeddings halfvec(1536),
+  embedding_model text,
+  embedded_at timestamptz,
   input_tokens int,
   output_tokens int,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (tags = lower(tags::text)::text[]),
+  CHECK (cardinality(tags) <= 20),
+  CHECK (raw_text IS NULL OR role = 'assistant')
 );
 
 -- Column notes kept in the database
@@ -913,16 +965,37 @@ COMMENT ON COLUMN meetings.media_file_id IS 'null while the audio has not arrive
 COMMENT ON COLUMN meetings.crm_activity_id IS 'Salesforce Task / Event id, blocks duplicate imports';
 COMMENT ON COLUMN meetings.meeting_at IS 'when the call happened';
 COMMENT ON COLUMN meetings.overall_score IS '0-100';
+COMMENT ON COLUMN meetings.tags IS 'labels for filtering: lower case, at most 20';
+COMMENT ON COLUMN meetings.summary_embeddings IS 'meaning vector of the summary, to find similar calls, filled by a worker; empty until then or for very short text';
+COMMENT ON COLUMN meetings.embedding_model IS 'model that made the vector, so it can be redone';
 COMMENT ON COLUMN meetings.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN analysis_runs.raw_output IS 'the model''s full reply as returned, for audit and re-parsing. Cleared when the recording expires';
 COMMENT ON COLUMN cues.tenant_id IS 'null = platform default';
 COMMENT ON COLUMN cues.code IS '1-12 on platform defaults';
 COMMENT ON COLUMN cues.overrides_cue_id IS 'company copy replacing a default';
+COMMENT ON COLUMN transcript_segments.text IS 'cleaned text, what users read';
+COMMENT ON COLUMN transcript_segments.raw_text IS 'speech-to-text output exactly as returned, before cleanup. Cleared when the recording expires';
+COMMENT ON COLUMN transcript_segments.asr_confidence IS '0 to 1, from the speech-to-text engine';
+COMMENT ON COLUMN transcript_segments.tags IS 'labels for filtering: lower case, at most 20';
+COMMENT ON COLUMN transcript_segments.embeddings IS 'meaning vector of this turn, filled by a worker; empty until then or for very short text';
+COMMENT ON COLUMN transcript_segments.embedding_model IS 'model that made the vector, so it can be redone';
 COMMENT ON COLUMN meeting_cue_scores.score IS '0-5';
+COMMENT ON COLUMN meeting_cue_scores.evidence_segment_id IS 'the exact transcript line the evidence is from';
 COMMENT ON COLUMN meeting_objections.segment_id IS 'the buyer line it points at';
+COMMENT ON COLUMN knowledge_sources.assessment_tag IS 'the one QA area it counts for';
+COMMENT ON COLUMN knowledge_sources.tags IS 'labels for filtering: lower case, at most 20';
+COMMENT ON COLUMN knowledge_sources.raw_text IS 'full text extracted from the file or page, before it is cut into chunks';
+COMMENT ON COLUMN knowledge_sources.content_hash IS 'sha256 of the content, blocks adding the same thing twice';
 COMMENT ON COLUMN knowledge_sources.deleted_at IS 'soft delete: rows are hidden, not removed';
 COMMENT ON COLUMN company_documents.tagged_cue_id IS 'which cue it grounds';
+COMMENT ON COLUMN company_documents.tags IS 'labels for filtering: lower case, at most 20';
+COMMENT ON COLUMN company_documents.raw_text IS 'full text extracted from the file, before it is cut into chunks';
+COMMENT ON COLUMN company_documents.embeddings IS 'meaning vector of the whole document, for example the average of its chunk vectors, to find similar documents, filled by a worker; empty until then or for very short text';
+COMMENT ON COLUMN company_documents.embedding_model IS 'model that made the vector, so it can be redone';
 COMMENT ON COLUMN company_documents.considered IS 'used in scoring';
 COMMENT ON COLUMN company_documents.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN knowledge_chunks.embeddings IS 'meaning vector of this chunk, filled by a worker; empty until then or for very short text';
+COMMENT ON COLUMN knowledge_chunks.embedding_model IS 'model that made the vector, so it can be redone';
 COMMENT ON COLUMN practice_catalog.tenant_id IS 'null = platform catalogue';
 COMMENT ON COLUMN practice_catalog.sample_prompts IS 'list of prompt strings';
 COMMENT ON COLUMN practice_lessons.owner_id IS 'rep who practises';
@@ -937,7 +1010,12 @@ COMMENT ON COLUMN mock_meetings.source_meeting_id IS 'must be an analysed call';
 COMMENT ON COLUMN mock_meetings.score IS '0-100';
 COMMENT ON COLUMN live_assist_sessions.meeting_id IS 'analysed call it was prepared from';
 COMMENT ON COLUMN chat_threads.lead_id IS 'set when asked from a lead';
+COMMENT ON COLUMN chat_messages.body IS 'what the user sees';
+COMMENT ON COLUMN chat_messages.raw_text IS 'assistant messages only: the model''s reply exactly as returned. Never set on user messages, so their text is not stored twice';
 COMMENT ON COLUMN chat_messages.citations IS 'knowledge source ids';
+COMMENT ON COLUMN chat_messages.tags IS 'labels for filtering: lower case, at most 20';
+COMMENT ON COLUMN chat_messages.embeddings IS 'meaning vector of the message, filled by a worker; empty until then or for very short text';
+COMMENT ON COLUMN chat_messages.embedding_model IS 'model that made the vector, so it can be redone';
 
 -- Indexes: every foreign key, plus the queries the app runs most
 CREATE INDEX idx_tenants_plan_id ON tenants(plan_id);
@@ -976,6 +1054,7 @@ CREATE INDEX idx_meeting_insights_meeting_id ON meeting_insights(meeting_id);
 CREATE INDEX idx_cues_overrides_cue_id ON cues(overrides_cue_id);
 CREATE INDEX idx_cues_updated_by ON cues(updated_by);
 CREATE INDEX idx_meeting_cue_scores_cue_id ON meeting_cue_scores(cue_id);
+CREATE INDEX idx_meeting_cue_scores_evidence_segment_id ON meeting_cue_scores(evidence_segment_id);
 CREATE INDEX idx_meeting_objections_meeting_id ON meeting_objections(meeting_id);
 CREATE INDEX idx_meeting_objections_segment_id ON meeting_objections(segment_id);
 CREATE INDEX idx_knowledge_sources_created_by ON knowledge_sources(tenant_id, created_by);
@@ -1025,13 +1104,25 @@ CREATE INDEX idx_media_files_retention ON media_files(retention_until) WHERE del
 CREATE INDEX idx_meetings_tenant_rep ON meetings(tenant_id, rep_id, uploaded_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX idx_meetings_lead_time ON meetings(lead_id, meeting_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX idx_meetings_pending ON meetings(tenant_id, processing_status) WHERE processing_status NOT IN ('analysed','failed');
+CREATE INDEX idx_meetings_tags ON meetings USING gin(tags);
+CREATE INDEX idx_meetings_summary_embeddings ON meetings USING hnsw (summary_embeddings halfvec_cosine_ops) WHERE summary_embeddings IS NOT NULL;
 CREATE INDEX idx_lead_timeline_events_feed ON lead_timeline_events(lead_id, occurred_at DESC);
 CREATE UNIQUE INDEX uq_cues_default_code ON cues(code) WHERE tenant_id IS NULL;
 CREATE UNIQUE INDEX uq_cues_one_override ON cues(tenant_id, overrides_cue_id) WHERE overrides_cue_id IS NOT NULL;
 CREATE INDEX idx_transcript_segments_tsv ON transcript_segments USING gin(tsv);
 CREATE INDEX idx_transcript_segments_time ON transcript_segments(meeting_id, start_ms);
+CREATE INDEX idx_transcript_segments_tags ON transcript_segments USING gin(tags);
+CREATE INDEX idx_transcript_segments_embeddings ON transcript_segments USING hnsw (embeddings halfvec_cosine_ops) WHERE embeddings IS NOT NULL;
+CREATE INDEX idx_knowledge_sources_tags ON knowledge_sources USING gin(tags);
+CREATE UNIQUE INDEX uq_knowledge_sources_hash ON knowledge_sources(tenant_id, content_hash) WHERE content_hash IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX idx_company_documents_tags ON company_documents USING gin(tags);
+CREATE UNIQUE INDEX uq_company_documents_hash ON company_documents(tenant_id, checksum_sha256) WHERE checksum_sha256 IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX idx_company_documents_embeddings ON company_documents USING hnsw (embeddings halfvec_cosine_ops) WHERE embeddings IS NOT NULL;
 CREATE INDEX idx_knowledge_chunks_tsv ON knowledge_chunks USING gin(tsv);
+CREATE INDEX idx_knowledge_chunks_embeddings ON knowledge_chunks USING hnsw (embeddings halfvec_cosine_ops) WHERE embeddings IS NOT NULL;
 CREATE INDEX idx_chat_messages_thread_time ON chat_messages(thread_id, created_at);
+CREATE INDEX idx_chat_messages_tags ON chat_messages USING gin(tags);
+CREATE INDEX idx_chat_messages_embeddings ON chat_messages USING hnsw (embeddings halfvec_cosine_ops) WHERE embeddings IS NOT NULL;
 
 -- ================================================================
 -- Who can see whose records (the manager - sales rep rule, enforced in the database)
@@ -1178,14 +1269,17 @@ CREATE POLICY cues_insert ON cues FOR INSERT WITH CHECK ((tenant_id IS NULL AND 
 CREATE POLICY cues_update ON cues FOR UPDATE USING ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin')) WITH CHECK ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin'));
 CREATE POLICY cues_delete ON cues FOR DELETE USING ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin'));
 
-ALTER TABLE meeting_cue_scores ENABLE ROW LEVEL SECURITY;
-CREATE POLICY meeting_cue_scores_access ON meeting_cue_scores FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_cue_scores.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_cue_scores.meeting_id));
-
 ALTER TABLE transcript_segments ENABLE ROW LEVEL SECURITY;
 CREATE POLICY transcript_segments_access ON transcript_segments FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.id = transcript_segments.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.id = transcript_segments.meeting_id));
 
+ALTER TABLE meeting_cue_scores ENABLE ROW LEVEL SECURITY;
+CREATE POLICY meeting_cue_scores_access ON meeting_cue_scores FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_cue_scores.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_cue_scores.meeting_id));
+
 ALTER TABLE meeting_objections ENABLE ROW LEVEL SECURITY;
 CREATE POLICY meeting_objections_access ON meeting_objections FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_objections.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_objections.meeting_id));
+
+ALTER TABLE transcript_segment_cues ENABLE ROW LEVEL SECURITY;
+CREATE POLICY transcript_segment_cues_access ON transcript_segment_cues FOR ALL USING (EXISTS (SELECT 1 FROM transcript_segments p WHERE p.id = transcript_segment_cues.segment_id)) WITH CHECK (EXISTS (SELECT 1 FROM transcript_segments p WHERE p.id = transcript_segment_cues.segment_id));
 
 ALTER TABLE knowledge_sources ENABLE ROW LEVEL SECURITY;
 CREATE POLICY knowledge_sources_select ON knowledge_sources FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
@@ -1416,6 +1510,17 @@ BEGIN
 END $$;
 CREATE TRIGGER trg_media_files_retention BEFORE INSERT ON media_files FOR EACH ROW EXECUTE FUNCTION media_files_retention();
 
+-- meeting_cue_scores: evidence points at a line of the same meeting, so clicking it always lands on the right place.
+CREATE FUNCTION cue_scores_check() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.evidence_segment_id IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM transcript_segments s WHERE s.id = NEW.evidence_segment_id AND s.meeting_id = NEW.meeting_id) THEN
+    RAISE EXCEPTION 'evidence must point at a line of the same meeting' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_meeting_cue_scores_check BEFORE INSERT OR UPDATE ON meeting_cue_scores FOR EACH ROW EXECUTE FUNCTION cue_scores_check();
+
 -- ================================================================
 -- Functions the API and workers call
 -- ================================================================
@@ -1476,9 +1581,27 @@ BEGIN
   ON CONFLICT (tenant_id, crm_stage) DO NOTHING;
 END $$;
 
--- Nightly retention job (worker): hides expired recordings and returns their object keys so the worker can delete the files.
+-- Nightly retention job (worker). When a recording expires it:
+--   hides the media file and returns its object key, so the worker can delete the file;
+--   clears the copies of the call content that depend on it: the raw speech-to-text, the turn embeddings
+--   and the model's raw replies. The cleaned transcript and the analysis stay, as the product's record of the call.
 CREATE FUNCTION expire_media() RETURNS TABLE(id uuid, storage_key text) LANGUAGE sql AS $$
-  UPDATE media_files SET deleted_at = now() WHERE retention_until < now() AND deleted_at IS NULL RETURNING media_files.id, media_files.storage_key
+  WITH expired AS (
+    UPDATE media_files SET deleted_at = now()
+    WHERE retention_until < now() AND deleted_at IS NULL
+    RETURNING media_files.id, media_files.storage_key
+  ), purge_segments AS (
+    UPDATE transcript_segments s SET raw_text = NULL, embeddings = NULL, embedding_model = NULL, embedded_at = NULL
+    FROM meetings m JOIN expired e ON e.id = m.media_file_id
+    WHERE s.meeting_id = m.id
+    RETURNING s.id
+  ), purge_runs AS (
+    UPDATE analysis_runs r SET raw_output = NULL
+    FROM meetings m JOIN expired e ON e.id = m.media_file_id
+    WHERE r.meeting_id = m.id
+    RETURNING r.id
+  )
+  SELECT expired.id, expired.storage_key FROM expired
 $$;
 
 -- ================================================================

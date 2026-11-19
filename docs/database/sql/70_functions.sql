@@ -58,7 +58,25 @@ BEGIN
   ON CONFLICT (tenant_id, crm_stage) DO NOTHING;
 END $$;
 
--- Nightly retention job (worker): hides expired recordings and returns their object keys so the worker can delete the files.
+-- Nightly retention job (worker). When a recording expires it:
+--   hides the media file and returns its object key, so the worker can delete the file;
+--   clears the copies of the call content that depend on it: the raw speech-to-text, the turn embeddings
+--   and the model's raw replies. The cleaned transcript and the analysis stay, as the product's record of the call.
 CREATE FUNCTION expire_media() RETURNS TABLE(id uuid, storage_key text) LANGUAGE sql AS $$
-  UPDATE media_files SET deleted_at = now() WHERE retention_until < now() AND deleted_at IS NULL RETURNING media_files.id, media_files.storage_key
+  WITH expired AS (
+    UPDATE media_files SET deleted_at = now()
+    WHERE retention_until < now() AND deleted_at IS NULL
+    RETURNING media_files.id, media_files.storage_key
+  ), purge_segments AS (
+    UPDATE transcript_segments s SET raw_text = NULL, embeddings = NULL, embedding_model = NULL, embedded_at = NULL
+    FROM meetings m JOIN expired e ON e.id = m.media_file_id
+    WHERE s.meeting_id = m.id
+    RETURNING s.id
+  ), purge_runs AS (
+    UPDATE analysis_runs r SET raw_output = NULL
+    FROM meetings m JOIN expired e ON e.id = m.media_file_id
+    WHERE r.meeting_id = m.id
+    RETURNING r.id
+  )
+  SELECT expired.id, expired.storage_key FROM expired
 $$;

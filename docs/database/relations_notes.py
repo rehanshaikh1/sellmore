@@ -32,17 +32,18 @@ PURPOSE = {
  'lead_risks': 'Risks flagged on a deal, with when they were resolved.',
  # meetings
  'media_files': 'An audio or transcript file, uploaded by a user or fetched from the Drive folder.',
- 'meetings': 'A call or meeting analysed in SellMore. Joins the CRM call, the audio file, the rep and the deal.',
- 'analysis_runs': 'Each transcription, analysis or re-score job on a meeting, with model and cost.',
+ 'meetings': 'A call or meeting analysed in SellMore. Joins the CRM call, the audio file, the rep and the deal. Has tags and a summary vector.',
+ 'analysis_runs': 'Each transcription, analysis or re-score job on a meeting, with model, cost and the model\'s raw reply.',
  'meeting_insights': 'Went well, struggled, could be better, next steps.',
  'meeting_cue_scores': 'The score, observation and evidence for each cue in a meeting.',
  'meeting_objections': 'Buyer objections in a meeting, with the rep\'s response and verdict.',
- 'transcript_segments': 'The transcript: one row per speaker turn, with time and searchable text.',
+ 'transcript_segments': 'The transcript: one row per speaker turn, with time, cleaned and raw text, tags and a search vector.',
+ 'transcript_segment_cues': 'Which cues a transcript line mentions.',
  # cues & knowledge
  'cues': 'Evaluation cues: platform defaults (no company) and company overrides or custom cues.',
- 'knowledge_sources': 'Knowledge base items: files, websites, videos, Q&A.',
- 'company_documents': 'Uploaded company documents, optionally tied to a cue.',
- 'knowledge_chunks': 'Indexed text pieces of a source or document, used by AI answers.',
+ 'knowledge_sources': 'Knowledge base items: files, websites, videos, Q&A. Keeps the extracted text and tags.',
+ 'company_documents': 'Uploaded company documents, optionally tied to a cue. Keeps the extracted text, tags and a whole-document vector.',
+ 'knowledge_chunks': 'Indexed text pieces of a source or document, with the search vector AI answers use.',
  'knowledge_citations': 'Each time an AI feature used a knowledge source.',
  # practice
  'practice_catalog': 'Practice lesson templates: platform-wide or company-specific.',
@@ -61,7 +62,7 @@ PURPOSE = {
  'automations': 'A workflow: trigger, condition and action.',
  'automation_runs': 'One execution of an automation.',
  'chat_threads': 'One AI chat conversation, private to its user.',
- 'chat_messages': 'The messages of a chat thread.',
+ 'chat_messages': 'The messages of a chat thread, with the model\'s raw reply, tags and a search vector.',
 }
 
 # 'child.column': what the link means
@@ -110,6 +111,9 @@ REL = {
  'analysis_runs.meeting_id': 'The meeting that was processed.',
  'media_files.uploaded_by': 'Who uploaded the file. Empty when fetched from Drive.',
  'meeting_cue_scores.cue_id': 'The cue that was scored. The cue row in force at scoring time, so history stays true.',
+ 'meeting_cue_scores.evidence_segment_id': 'The transcript line the evidence comes from, so clicking it lands on the exact line. Must be a line of the same meeting.',
+ 'transcript_segment_cues.segment_id': 'The transcript line.',
+ 'transcript_segment_cues.cue_id': 'A cue the line mentions.',
  'meeting_cue_scores.meeting_id': 'The meeting that was scored. One score per cue per meeting.',
  'meeting_insights.meeting_id': 'The meeting the insight is about.',
  'meeting_objections.meeting_id': 'The meeting the objection was raised in.',
@@ -211,7 +215,7 @@ TAIL = """## Relations worth knowing
 
 **Joins that are not a foreign key.** `meetings.crm_activity_id` joins on Salesforce's own id (`external_id`), not on the SellMore uuid, so a re-import is recognised.
 
-**Who can see a row.** Rows with an owner column (`meetings.rep_id`, `leads.owner_id`, `practice_lessons.owner_id`, `coaching_programs.rep_id`, `mock_meetings.rep_id`, `live_assist_sessions.user_id`, `crm_activities.owner_user_id`) follow the manager rule. Child tables (transcript, scores, objections, lead stakeholders, lessons...) are visible exactly when their parent is.
+**Text, tags and vectors.** Search-by-meaning vectors (`embeddings`, `meetings.summary_embeddings`) live next to the text they describe on `transcript_segments`, `chat_messages`, `knowledge_chunks`, `company_documents` and `meetings`, with the `embedding_model` that made them. Raw copies (`raw_text`, `raw_output`) sit beside the cleaned text. Both follow their row's access rule, and the raw copies and turn vectors of a call are cleared when its recording expires.\n\n**Who can see a row.** Rows with an owner column (`meetings.rep_id`, `leads.owner_id`, `practice_lessons.owner_id`, `coaching_programs.rep_id`, `mock_meetings.rep_id`, `live_assist_sessions.user_id`, `crm_activities.owner_user_id`) follow the manager rule. Child tables (transcript, scores, objections, lead stakeholders, lessons...) are visible exactly when their parent is.
 
 ## Common joins
 

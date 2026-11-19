@@ -234,6 +234,39 @@ html_path = os.path.join(HERE, 'er-diagram.html')
 html = open(html_path).read()
 new, k = re.subn(r'^const DATA = .*$', lambda m: 'const DATA = ' + json.dumps(data) + ';', html, count=1, flags=re.M)
 if k: open(html_path, 'w').write(new)
+# ---- flow section: rendered from flow_steps.py and checked against the schema
+import html as _h
+from flow_steps import PHASES
+_cols = {n: {x[0] for x in cols} for n, d, cols, uqs, o in TBL}
+_flow_problems = []
+def _fmt(t):
+    t = _h.escape(t)
+    t = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', t)
+    return re.sub(r'`(.+?)`', r'<code>\1</code>', t)
+def _render_flow():
+    out = []
+    for phase, steps in PHASES:
+        out.append(f'    <h3 class="phase">{_h.escape(phase)}</h3>')
+        out.append(f'    <ol class="flow" start="{steps[0]["n"]}">')
+        for st in steps:
+            uses = []
+            for tbl, why, colspec in st['uses']:
+                if tbl not in _cols: _flow_problems.append(f'step {st["n"]}: unknown table {tbl}'); continue
+                items = []
+                for part in colspec.split(' | '):
+                    nm, _, note = part.partition(': ')
+                    if nm.strip() not in _cols[tbl]: _flow_problems.append(f'step {st["n"]}: {tbl}.{nm.strip()} is not a column')
+                    items.append(f'<li><code>{_h.escape(nm.strip())}</code>' + (f' {_fmt(note)}' if note else '') + '</li>')
+                uses.append(f'<div class="use"><div class="usehead"><button type="button" class="tchip" data-tbl="{tbl}">{tbl}</button>'
+                            f'<p class="why">{_fmt(why)}</p></div><ul class="cols">{"".join(items)}</ul></div>')
+            out.append(f'      <li class="step"><span class="num">{st["n"]}</span><div class="stepbody"><h3>{_h.escape(st["title"])}</h3>'
+                       f'<p>{_fmt(st["text"])}</p><div class="uses">{"".join(uses)}</div></div></li>')
+        out.append('    </ol>')
+    return '\n'.join(out)
+_fl = _render_flow()
+if _flow_problems: raise SystemExit('flow_steps.py problems:\n  ' + '\n  '.join(_flow_problems))
+_new, _k = re.subn(r'<!--FLOW:BEGIN-->.*?<!--FLOW:END-->', lambda m: '<!--FLOW:BEGIN-->\n' + _fl + '\n    <!--FLOW:END-->', open(html_path).read(), count=1, flags=re.S)
+if _k: open(html_path, 'w').write(_new)
 # ---------------------------------------------------------------- RELATIONS.md
 from relations_notes import PURPOSE, REL, TENANT, HEAD, TAIL
 rel_rows, tenant_group, tfk_list, problems, used = {}, {}, [], [], set()

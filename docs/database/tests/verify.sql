@@ -151,6 +151,68 @@ SELECT t.ok('lead_stats counts the deal''s calls', (SELECT call_count FROM lead_
 INSERT INTO cues(tenant_id,code,name,category,instructions) VALUES (NULL,1,'Opening','Intro','x');
 SELECT t.ok('only one default cue per code', t.refused($$insert into cues(tenant_id,code,name,category,instructions) values (NULL,1,'Dup','Intro','x')$$));
 
+-- ================= tags, raw text, vectors =================
+RESET ROLE;
+CREATE FUNCTION t.vec(i int) RETURNS halfvec LANGUAGE sql AS
+  $$ SELECT (array(SELECT CASE WHEN g = i THEN 1.0 ELSE 0.0 END FROM generate_series(1,1536) g))::real[]::halfvec(1536) $$;
+INSERT INTO transcript_segments(id,meeting_id,seq,speaker,speaker_role,start_ms,text,raw_text,embeddings,embedding_model,embedded_at) VALUES
+ ('66666666-0000-0000-0000-000000000003','44444444-0000-0000-0000-000000000002',1,'Buyer','prospect',0,'We need it by June','we need it by june uh',t.vec(1),'test-model',now());
+INSERT INTO analysis_runs(meeting_id,kind,status,raw_output) VALUES ('44444444-0000-0000-0000-000000000002','analysis','success','{"cues":[]}');
+UPDATE transcript_segments SET raw_text='hello', embeddings=t.vec(2), embedding_model='test-model', embedded_at=now(), tags='{greeting}' WHERE id='66666666-0000-0000-0000-000000000001';
+
+SELECT t.ok('tags must be lower case', t.refused($$update transcript_segments set tags='{Pricing}' where id='66666666-0000-0000-0000-000000000001'$$));
+SELECT t.ok('no more than 20 tags', t.refused($$update meetings set tags = (select array_agg('t'||g) from generate_series(1,21) g) where id='44444444-0000-0000-0000-000000000001'$$));
+UPDATE transcript_segments SET tags='{pricing,security}' WHERE id='66666666-0000-0000-0000-000000000002';
+SELECT t.ok('tag filter finds the line', t.n($$select count(*) from transcript_segments where tags && array['pricing']$$) = 1);
+SELECT t.ok('a vector of the wrong size is refused', t.refused($$update transcript_segments set embeddings='[1,2,3]'::halfvec where id='66666666-0000-0000-0000-000000000001'$$));
+SELECT t.ok('nearest-meaning search returns the closest turn',
+  (SELECT id FROM transcript_segments WHERE embeddings IS NOT NULL ORDER BY embeddings <=> t.vec(2) LIMIT 1) = '66666666-0000-0000-0000-000000000001'
+  AND (SELECT id FROM transcript_segments WHERE embeddings IS NOT NULL ORDER BY embeddings <=> t.vec(1) LIMIT 1) = '66666666-0000-0000-0000-000000000003');
+SELECT t.ok('the vector index exists', (SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_transcript_segments_embeddings' AND indexdef LIKE '%hnsw%') = 1);
+
+SELECT t.as_user('sales_rep','aaaaaaaa-0000-0000-0000-0000000000b2','a0000000-0000-0000-0000-000000000001');
+SELECT t.ok('vector search only reaches the rep''s own calls', t.n('select count(*) from transcript_segments where embeddings is not null') = 1);
+SELECT t.as_user('manager','aaaaaaaa-0000-0000-0000-0000000000a1','a0000000-0000-0000-0000-000000000001');
+SELECT t.ok('vector search follows the manager rule too', t.n('select count(*) from transcript_segments where embeddings is not null') = 0);
+RESET ROLE;
+
+INSERT INTO chat_threads(id,tenant_id,user_id,title) VALUES ('77777777-0000-0000-0000-000000000001','a0000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-0000000000b1','t');
+SELECT t.ok('raw text is refused on a user chat message', t.refused($$insert into chat_messages(thread_id,role,body,raw_text) values ('77777777-0000-0000-0000-000000000001','user','hi','hi there')$$));
+SELECT t.ok('raw reply, tags and a vector are accepted on an assistant message', NOT t.refused($$insert into chat_messages(thread_id,role,body,raw_text,model,tags,embeddings,embedding_model,embedded_at) values ('77777777-0000-0000-0000-000000000001','assistant','Hello','**Hello**','m1','{greeting}',t.vec(5),'test-model',now())$$));
+
+SELECT t.ok('evidence on a line of the same meeting is accepted', NOT t.refused($$insert into meeting_cue_scores(meeting_id,cue_id,score,is_assessable,evidence_segment_id) select '44444444-0000-0000-0000-000000000001', id, 3, true, '66666666-0000-0000-0000-000000000001' from cues where code=1$$));
+SELECT t.ok('evidence on another meeting''s line is refused', t.refused($$insert into meeting_cue_scores(meeting_id,cue_id,score,is_assessable,evidence_segment_id) select '44444444-0000-0000-0000-000000000002', id, 3, true, '66666666-0000-0000-0000-000000000002' from cues where code=1$$));
+INSERT INTO transcript_segment_cues(segment_id,cue_id) SELECT '66666666-0000-0000-0000-000000000002', id FROM cues WHERE code=1;
+SELECT t.ok('a line can be linked to the cues it mentions', (SELECT count(*) FROM transcript_segment_cues) = 1);
+SELECT t.ok('an objection category outside the list is refused', t.refused($$insert into meeting_objections(meeting_id,at_ms,objection,status,category) values ('44444444-0000-0000-0000-000000000001',0,'x','Resolved','vibes')$$));
+SELECT t.ok('an objection category from the list is accepted', NOT t.refused($$insert into meeting_objections(meeting_id,at_ms,objection,status,category) values ('44444444-0000-0000-0000-000000000001',0,'x','Resolved','price')$$));
+
+INSERT INTO knowledge_sources(tenant_id,created_by,name,type,content_hash,raw_text,tags) VALUES ('a0000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','Guide','PDF','h1','extracted text','{product}');
+SELECT t.ok('the same content cannot be added twice in a company', t.refused($$insert into knowledge_sources(tenant_id,created_by,name,type,content_hash) values ('a0000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','Guide copy','PDF','h1')$$));
+SELECT t.ok('another company can add the same content', NOT t.refused($$insert into knowledge_sources(tenant_id,created_by,name,type,content_hash) values ('b0000000-0000-0000-0000-000000000001','bbbbbbbb-0000-0000-0000-000000000001','Guide','PDF','h1')$$));
+INSERT INTO company_documents(tenant_id,uploaded_by,name,storage_key,checksum_sha256) VALUES ('a0000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','Doc','k/doc','c1');
+SELECT t.ok('the same document file cannot be uploaded twice', t.refused($$insert into company_documents(tenant_id,uploaded_by,name,storage_key,checksum_sha256) values ('a0000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','Doc 2','k/doc2','c1')$$));
+
+UPDATE company_documents SET embeddings = t.vec(7), embedding_model = 'test-model', embedded_at = now() WHERE name = 'Doc';
+SELECT t.ok('a company document can hold a whole-document vector and be found by meaning',
+  (SELECT name FROM company_documents WHERE embeddings IS NOT NULL ORDER BY embeddings <=> t.vec(7) LIMIT 1) = 'Doc'
+  AND (SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_company_documents_embeddings' AND indexdef LIKE '%hnsw%') = 1);
+SELECT t.ok('a document vector of the wrong size is refused', t.refused($$update company_documents set embeddings = '[1,2]'::halfvec where name = 'Doc'$$));
+SELECT t.as_user('sales_rep','aaaaaaaa-0000-0000-0000-0000000000b1','a0000000-0000-0000-0000-000000000001');
+SELECT t.ok('a rep can search company documents of their own company only', t.n('select count(*) from company_documents where embeddings is not null') = 1);
+SELECT t.as_user('client_admin','bbbbbbbb-0000-0000-0000-000000000001','b0000000-0000-0000-0000-000000000001');
+SELECT t.ok('another company cannot see them', t.n('select count(*) from company_documents where embeddings is not null') = 0);
+RESET ROLE;
+
+-- retention: when the recording expires, raw copies and turn vectors go, the cleaned transcript stays
+UPDATE media_files SET retention_until = now() - interval '1 day' WHERE id='55555555-0000-0000-0000-000000000001';
+SELECT count(*) AS expired_files FROM expire_media();
+SELECT t.ok('expiry clears the raw speech-to-text and the turn vector', (SELECT raw_text IS NULL AND embeddings IS NULL AND embedding_model IS NULL FROM transcript_segments WHERE id='66666666-0000-0000-0000-000000000003'));
+SELECT t.ok('expiry keeps the cleaned transcript', (SELECT text = 'We need it by June' FROM transcript_segments WHERE id='66666666-0000-0000-0000-000000000003'));
+SELECT t.ok('expiry clears the model''s raw reply', (SELECT raw_output IS NULL FROM analysis_runs WHERE meeting_id='44444444-0000-0000-0000-000000000002'));
+SELECT t.ok('expiry hides the media file', (SELECT deleted_at IS NOT NULL FROM media_files WHERE id='55555555-0000-0000-0000-000000000001'));
+SELECT t.ok('expiry leaves other meetings alone', (SELECT raw_text = 'hello' AND embeddings IS NOT NULL FROM transcript_segments WHERE id='66666666-0000-0000-0000-000000000001'));
+
 -- ================= summary =================
 SELECT count(*) FILTER (WHERE ok) AS passed, count(*) FILTER (WHERE NOT ok) AS failed FROM t.results;
 SELECT name AS failed_check FROM t.results WHERE NOT ok;

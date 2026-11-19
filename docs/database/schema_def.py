@@ -17,11 +17,22 @@
 #     policies      : raw CREATE POLICY statements for rls='custom'
 U='uuid'; T='text'; TS='timestamptz'; I='int'; BI='bigint'; N='numeric(12,2)'; B='boolean'; D='date'; J='jsonb'
 BY='bytea'; TV='tsvector'; INET='inet'
+# Embeddings: pgvector halfvec (2 bytes per number). The size is fixed in each column, so it is set once here.
+# Change EMBED_DIM to match the embedding model you pick, then regenerate.
+EMBED_DIM = 1536
+VEC = f'halfvec({EMBED_DIM})'
 def c(name,typ=T,flags='',note='',default=''): return (name,typ,flags,note,default)
 def pk(): return c('id',U,'pk','','gen_random_uuid()')
 def tenant(): return c('tenant_id',U,'fk:tenants.id,cascade')
 def created(name='created_at'): return c(name,TS,'','','now()')
 def updated(): return c('updated_at',TS,'','','now()')
+def tags(): return c('tags','text[]','','labels for filtering: lower case, at most 20',"'{}'")
+def embed_cols(name='embeddings', what='the text'):
+    return [c(name,VEC,'n','meaning vector of '+what+', filled by a worker; empty until then or for very short text'),
+            c('embedding_model',T,'n','model that made the vector, so it can be redone'),c('embedded_at',TS,'n')]
+TAGCHK = ['tags = lower(tags::text)::text[]', 'cardinality(tags) <= 20']
+HNSW = "CREATE INDEX idx_{t}_%s ON {t} USING hnsw (%s halfvec_cosine_ops) WHERE %s IS NOT NULL"
+GINTAGS = "CREATE INDEX idx_{t}_tags ON {t} USING gin(tags)"
 def deleted(): return c('deleted_at',TS,'n','soft delete: rows are hidden, not removed')
 
 DOMAINS = {
@@ -161,28 +172,39 @@ TABLES = [
    c('crm_activity_id',T,'fk:crm_activities.external_id,n','Salesforce Task / Event id, blocks duplicate imports'),c('crm_opportunity_id',T,'n'),
    c('name'),c('source',T,'','enum:upload|crm|drive'),c('source_detail',T,'n'),c('meeting_at',TS,'n','when the call happened'),created('uploaded_at'),c('duration_sec',I,'n'),
    c('processing_status',T,'','enum:awaiting_audio|queued|transcribing|analysing|analysed|failed|unmatched','\'queued\''),c('failure_reason',T,'n'),
-   c('match_status',T,'n','enum:matched|unmatched|ambiguous'),c('overall_score',I,'n','0-100'),c('summary',T,'n'),c('analysed_at',TS,'n'),updated(),deleted()],
+   c('match_status',T,'n','enum:matched|unmatched|ambiguous'),c('overall_score',I,'n','0-100'),c('summary',T,'n'),c('language',T,'n'),tags(),*embed_cols('summary_embeddings','the summary, to find similar calls'),
+   c('analysed_at',TS,'n'),updated(),deleted()],
    [['tenant_id','crm_activity_id'],['tenant_id','media_file_id']],
    {'tenant_unique':True,'tfk':[('rep_id','users'),('lead_id','leads'),('integration_id','integrations'),('media_file_id','media_files'),('crm_activity_id','crm_activities','external_id')],
     'no_auto_idx':['rep_id'],'rls':('owner','rep_id'),
-    'checks':['overall_score IS NULL OR overall_score BETWEEN 0 AND 100',"source <> 'upload' OR media_file_id IS NOT NULL","source <> 'crm' OR crm_activity_id IS NOT NULL","source <> 'drive' OR media_file_id IS NOT NULL"],
+    'checks':['overall_score IS NULL OR overall_score BETWEEN 0 AND 100',"source <> 'upload' OR media_file_id IS NOT NULL","source <> 'crm' OR crm_activity_id IS NOT NULL","source <> 'drive' OR media_file_id IS NOT NULL"]+TAGCHK,
     'indexes':["CREATE INDEX idx_meetings_tenant_rep ON {t}(tenant_id, rep_id, uploaded_at DESC) WHERE deleted_at IS NULL",
                "CREATE INDEX idx_meetings_lead_time ON {t}(lead_id, meeting_at DESC) WHERE deleted_at IS NULL",
-               "CREATE INDEX idx_meetings_pending ON {t}(tenant_id, processing_status) WHERE processing_status NOT IN ('analysed','failed')"]}),
+               "CREATE INDEX idx_meetings_pending ON {t}(tenant_id, processing_status) WHERE processing_status NOT IN ('analysed','failed')",
+               GINTAGS,HNSW%('summary_embeddings','summary_embeddings','summary_embeddings')]}),
  ('analysis_runs','meetings',[pk(),c('meeting_id',U,'fk:meetings.id,cascade'),c('kind',T,'','enum:transcription|analysis|rescore'),
    c('status',T,'','enum:queued|running|success|failed','\'queued\''),c('model',T,'n'),c('prompt_version',T,'n'),c('input_tokens',I,'n'),c('output_tokens',I,'n'),
-   c('credits_charged',I,'','','0'),c('started_at',TS,'n'),c('finished_at',TS,'n'),c('error',T,'n'),created()],[],{'rls':('child','meetings','meeting_id')}),
+   c('credits_charged',I,'','','0'),c('raw_output',J,'n','the model\'s full reply as returned, for audit and re-parsing. Cleared when the recording expires'),
+   c('started_at',TS,'n'),c('finished_at',TS,'n'),c('error',T,'n'),created()],[],{'rls':('child','meetings','meeting_id')}),
  ('meeting_insights','meetings',[pk(),c('meeting_id',U,'fk:meetings.id,cascade'),c('kind',T,'','enum:went_well|struggled|could_be_better|next_step'),c('body'),c('position',I)],[],
    {'rls':('child','meetings','meeting_id')}),
  ('meeting_cue_scores','meetings',[pk(),c('meeting_id',U,'fk:meetings.id,cascade'),c('cue_id',U,'fk:cues.id'),c('score',N,'n','0-5'),c('is_assessable',B),
-   c('observation',T,'n'),c('improvement',T,'n'),c('evidence',T,'n'),c('severity',T,'n','enum:critical|warning|positive')],[['meeting_id','cue_id']],
+   c('observation',T,'n'),c('improvement',T,'n'),c('evidence',T,'n'),c('evidence_segment_id',U,'fk:transcript_segments.id,n,setnull','the exact transcript line the evidence is from'),
+   c('severity',T,'n','enum:critical|warning|positive')],[['meeting_id','cue_id']],
    {'rls':('child','meetings','meeting_id'),'checks':['score IS NULL OR score BETWEEN 0 AND 5']}),
  ('meeting_objections','meetings',[pk(),c('meeting_id',U,'fk:meetings.id,cascade'),c('segment_id',U,'fk:transcript_segments.id,n,setnull','the buyer line it points at'),
-   c('at_ms',I),c('objection'),c('rep_response',T,'n'),c('status',T,'','enum:Resolved|Partially Resolved|Unresolved'),c('stronger_response',T,'n')],[],
+   c('at_ms',I),c('objection'),c('category',T,'n','enum:price|timing|authority|competitor|technical|risk|other'),c('rep_response',T,'n'),
+   c('status',T,'','enum:Resolved|Partially Resolved|Unresolved'),c('stronger_response',T,'n')],[],
    {'rls':('child','meetings','meeting_id')}),
  ('transcript_segments','meetings',[pk(),c('meeting_id',U,'fk:meetings.id,cascade'),c('seq',I),c('speaker'),c('speaker_role',T,'','enum:rep|prospect'),
-   c('start_ms',I),c('end_ms',I,'n'),c('text'),c('tsv',TV,'n',"gen:to_tsvector('english', text)")],[['meeting_id','seq']],
-   {'rls':('child','meetings','meeting_id'),'indexes':["CREATE INDEX idx_transcript_segments_tsv ON {t} USING gin(tsv)","CREATE INDEX idx_transcript_segments_time ON {t}(meeting_id, start_ms)"]}),
+   c('start_ms',I),c('end_ms',I,'n'),c('text',T,'','cleaned text, what users read'),
+   c('raw_text',T,'n','speech-to-text output exactly as returned, before cleanup. Cleared when the recording expires'),
+   c('language',T,'n'),c('asr_confidence','numeric(4,3)','n','0 to 1, from the speech-to-text engine'),tags(),
+   *embed_cols('embeddings','this turn'),c('tsv',TV,'n',"gen:to_tsvector('english', text)")],[['meeting_id','seq']],
+   {'rls':('child','meetings','meeting_id'),'checks':TAGCHK+['asr_confidence IS NULL OR asr_confidence BETWEEN 0 AND 1'],
+    'indexes':["CREATE INDEX idx_transcript_segments_tsv ON {t} USING gin(tsv)","CREATE INDEX idx_transcript_segments_time ON {t}(meeting_id, start_ms)",GINTAGS,HNSW%('embeddings','embeddings','embeddings')]}),
+ ('transcript_segment_cues','meetings',[c('segment_id',U,'pk,fk:transcript_segments.id,cascade'),c('cue_id',U,'pk,fk:cues.id')],[],
+   {'rls':('child','transcript_segments','segment_id')}),
 
  # ================= cues & knowledge =================
  ('cues','cues',[pk(),c('tenant_id',U,'fk:tenants.id,n,cascade','null = platform default'),c('code',I,'n','1-12 on platform defaults'),
@@ -196,17 +218,22 @@ TABLES = [
      "CREATE POLICY cues_update ON cues FOR UPDATE USING ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin')) WITH CHECK ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin'))",
      "CREATE POLICY cues_delete ON cues FOR DELETE USING ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin'))"]}),
  ('knowledge_sources','cues',[pk(),tenant(),c('created_by',U,'fk:users.id'),c('name'),c('type',T,'','enum:PDF|DOCX|TXT|Website|YouTube|Manual QA'),
-   c('size_or_url',T,'n'),c('storage_key',T,'n'),c('status',T,'','enum:indexed|processing|failed','\'processing\''),c('assessment_tag',T,'n'),
+   c('size_or_url',T,'n'),c('storage_key',T,'n'),c('status',T,'','enum:indexed|processing|failed','\'processing\''),c('assessment_tag',T,'n','the one QA area it counts for'),
+   tags(),c('raw_text',T,'n','full text extracted from the file or page, before it is cut into chunks'),c('content_hash',T,'n','sha256 of the content, blocks adding the same thing twice'),
    c('available_to_ai',B,'','','true'),created(),updated(),deleted()],[],
-   {'tenant_unique':True,'tfk':[('created_by','users')],'rls':'tenant','read':ALLR,'write':ADMGR}),
+   {'tenant_unique':True,'tfk':[('created_by','users')],'rls':'tenant','read':ALLR,'write':ADMGR,'checks':TAGCHK,
+    'indexes':[GINTAGS,"CREATE UNIQUE INDEX uq_knowledge_sources_hash ON {t}(tenant_id, content_hash) WHERE content_hash IS NOT NULL AND deleted_at IS NULL"]}),
  ('company_documents','cues',[pk(),tenant(),c('uploaded_by',U,'fk:users.id'),c('name'),c('size_bytes',BI,'n'),c('mime_type',T,'n'),c('storage_key',T),c('checksum_sha256',T,'n'),
-   c('tagged_cue_id',U,'fk:cues.id,n,setnull','which cue it grounds'),c('considered',B,'','used in scoring','true'),c('status',T,'','enum:ready|processing','\'processing\''),
+   c('tagged_cue_id',U,'fk:cues.id,n,setnull','which cue it grounds'),tags(),c('raw_text',T,'n','full text extracted from the file, before it is cut into chunks'),
+   *embed_cols('embeddings','the whole document, for example the average of its chunk vectors, to find similar documents'),
+   c('considered',B,'','used in scoring','true'),c('status',T,'','enum:ready|processing','\'processing\''),
    created('uploaded_at'),updated(),deleted()],[],
-   {'tenant_unique':True,'tfk':[('uploaded_by','users')],'rls':'tenant','read':ALLR,'write':ADMIN}),
+   {'tenant_unique':True,'tfk':[('uploaded_by','users')],'rls':'tenant','read':ALLR,'write':ADMIN,'checks':TAGCHK,
+    'indexes':[GINTAGS,"CREATE UNIQUE INDEX uq_company_documents_hash ON {t}(tenant_id, checksum_sha256) WHERE checksum_sha256 IS NOT NULL AND deleted_at IS NULL",HNSW%('embeddings','embeddings','embeddings')]}),
  ('knowledge_chunks','cues',[pk(),tenant(),c('source_id',U,'fk:knowledge_sources.id,n,cascade'),c('document_id',U,'fk:company_documents.id,n,cascade'),c('seq',I),c('content'),
-   c('token_count',I,'n'),c('tsv',TV,'n',"gen:to_tsvector('english', content)")],[],
+   c('token_count',I,'n'),*embed_cols('embeddings','this chunk'),c('tsv',TV,'n',"gen:to_tsvector('english', content)")],[],
    {'rls':'tenant','read':ALLR,'write':(),'checks':['(source_id IS NULL) <> (document_id IS NULL)'],
-    'indexes':["CREATE INDEX idx_knowledge_chunks_tsv ON {t} USING gin(tsv)"]}),
+    'indexes':["CREATE INDEX idx_knowledge_chunks_tsv ON {t} USING gin(tsv)",HNSW%('embeddings','embeddings','embeddings')]}),
  ('knowledge_citations','cues',[pk(),c('source_id',U,'fk:knowledge_sources.id,cascade'),c('user_id',U,'fk:users.id,n,setnull'),c('meeting_id',U,'fk:meetings.id,n,setnull'),
    c('used_by',T,'','enum:ask_ai|ai_chat|live_assist|mock|practice'),created('cited_at')],[],{'rls':('child','knowledge_sources','source_id')}),
 
@@ -256,7 +283,9 @@ TABLES = [
    c('status',T,'','enum:success|failed'),c('output',T,'n'),created('ran_at')],[],{'rls':('child','automations','automation_id')}),
  ('chat_threads','ai',[pk(),tenant(),c('user_id',U,'fk:users.id'),c('lead_id',U,'fk:leads.id,n','set when asked from a lead'),c('title',T,'n'),created(),updated()],[],
    {'tenant_unique':True,'tfk':[('user_id','users'),('lead_id','leads')],'rls':('user','user_id')}),
- ('chat_messages','ai',[pk(),c('thread_id',U,'fk:chat_threads.id,cascade'),c('role',T,'','enum:user|assistant'),c('body'),c('citations',J,'n','knowledge source ids'),
+ ('chat_messages','ai',[pk(),c('thread_id',U,'fk:chat_threads.id,cascade'),c('role',T,'','enum:user|assistant'),c('body','text','','what the user sees'),c('raw_text',T,'n','assistant messages only: the model\'s reply exactly as returned. Never set on user messages, so their text is not stored twice'),
+   c('citations',J,'n','knowledge source ids'),c('model',T,'n'),tags(),*embed_cols('embeddings','the message'),
    c('input_tokens',I,'n'),c('output_tokens',I,'n'),created()],[],
-   {'rls':('child','chat_threads','thread_id'),'indexes':["CREATE INDEX idx_chat_messages_thread_time ON {t}(thread_id, created_at)"]}),
+   {'rls':('child','chat_threads','thread_id'),'checks':TAGCHK+["raw_text IS NULL OR role = 'assistant'"],
+    'indexes':["CREATE INDEX idx_chat_messages_thread_time ON {t}(thread_id, created_at)",GINTAGS,HNSW%('embeddings','embeddings','embeddings')]}),
 ]

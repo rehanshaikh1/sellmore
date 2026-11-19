@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS vector;     -- pgvector: halfvec columns and HNSW indexes for search by meaning (0.7 or newer)
 
 -- Database roles. Passwords / login are granted outside this file (secrets manager).
 --   sellmore_app    the API. Subject to row level security. Cannot read tokens or password hashes.
