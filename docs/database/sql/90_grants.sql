@@ -17,7 +17,8 @@ REVOKE UPDATE, DELETE ON credit_transactions, audit_log, platform_audit_log FROM
 GRANT EXECUTE ON FUNCTION expire_media() TO sellmore_worker;
 
 -- Sign-in service
-GRANT SELECT ON tenants, plans, users, invitations TO sellmore_auth;
-GRANT INSERT, UPDATE ON users, invitations TO sellmore_auth;
+GRANT SELECT ON clients, plans, client_users, invitations TO sellmore_auth;
+GRANT INSERT, UPDATE ON client_users, invitations TO sellmore_auth;
+GRANT SELECT, UPDATE ON platform_owner_users TO sellmore_auth;
 GRANT SELECT, INSERT, UPDATE, DELETE ON auth_identities TO sellmore_auth;
 GRANT INSERT ON audit_log TO sellmore_auth;

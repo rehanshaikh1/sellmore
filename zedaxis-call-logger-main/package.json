@@ -1,0 +1,14 @@
+{
+  "name": "zedaxis-call-logger",
+  "version": "1.0.0",
+  "description": "Logs CallSwitch One calls as completed Tasks on the matching Salesforce lead, contact or account",
+  "main": "server.js",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  }
+}

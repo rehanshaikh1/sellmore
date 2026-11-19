@@ -14,13 +14,47 @@ END $$;
 
 -- Who is asking. The API sets these with SET LOCAL at the start of every transaction.
 CREATE FUNCTION app_user_id()   RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('app.user_id', true), '')::uuid $$;
-CREATE FUNCTION app_tenant_id() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('app.tenant_id', true), '')::uuid $$;
+CREATE FUNCTION app_client_id() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('app.client_id', true), '')::uuid $$;
 CREATE FUNCTION app_role()      RETURNS text LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('app.role', true), '') $$;
+-- The caller as a client user. Empty for a platform owner, who is not in client_users, so company rows never point at one.
+CREATE FUNCTION app_client_user_id() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT CASE WHEN app_role() = 'super_admin' THEN NULL ELSE app_user_id() END $$;
 
 CREATE FUNCTION set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN NEW.updated_at := now(); RETURN NEW; END $$;
 
--- Ledgers and audit trails are append only. A tenant purge (cascade from tenants) is the one allowed delete.
+-- Stamps created_by, updated_by and deleted_by from the session, so the API cannot forget or forge them.
+--   argument 'client'   : the actor is the signed-in client user (empty for a super admin, who is not a client user)
+--   argument 'platform' : the actor is the signed-in platform owner
+-- A session with no role (a worker, a migration) keeps the values it was given. created_by never changes after insert.
+CREATE FUNCTION set_audit_columns() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_actor uuid := CASE WHEN TG_ARGV[0] = 'platform' THEN (CASE WHEN app_role() = 'super_admin' THEN app_user_id() END) ELSE app_client_user_id() END;
+  v_new jsonb := to_jsonb(NEW);
+  v_old jsonb := CASE WHEN TG_OP = 'UPDATE' THEN to_jsonb(OLD) END;
+  v_patch jsonb := '{}'::jsonb;
+BEGIN
+  IF v_new ? 'created_by' THEN
+    IF TG_OP = 'UPDATE' THEN v_patch := v_patch || jsonb_build_object('created_by', v_old->'created_by');
+    ELSIF app_role() IS NOT NULL THEN v_patch := v_patch || jsonb_build_object('created_by', v_actor);
+    END IF;
+  END IF;
+  IF v_new ? 'updated_by' AND app_role() IS NOT NULL THEN
+    v_patch := v_patch || jsonb_build_object('updated_by', v_actor);
+  END IF;
+  IF v_new ? 'deleted_by' THEN
+    IF v_new->'deleted_at' = 'null'::jsonb THEN
+      v_patch := v_patch || jsonb_build_object('deleted_by', NULL);                    -- restored, or never deleted
+    ELSIF app_role() IS NOT NULL AND (TG_OP = 'INSERT' OR v_old->'deleted_at' = 'null'::jsonb) THEN
+      v_patch := v_patch || jsonb_build_object('deleted_by', v_actor);                 -- being deleted now
+    ELSIF TG_OP = 'UPDATE' THEN
+      v_patch := v_patch || jsonb_build_object('deleted_by', v_old->'deleted_by');     -- already deleted: keep who did it
+    END IF;
+  END IF;
+  IF v_patch <> '{}'::jsonb THEN NEW := jsonb_populate_record(NEW, v_patch); END IF;
+  RETURN NEW;
+END $$;
+
+-- Ledgers and audit trails are append only. A client purge (cascade from clients) is the one allowed delete.
 CREATE FUNCTION forbid_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN RETURN OLD; END IF;

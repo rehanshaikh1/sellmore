@@ -15,7 +15,7 @@ def parse(flags):
     return {
         'pk': 'pk' in f, 'n': 'n' in f, 'uq': 'uq' in f,
         'fk': next((x[3:] for x in f if x.startswith('fk:')), None),
-        'cascade': 'cascade' in f, 'setnull': 'setnull' in f,
+        'cascade': 'cascade' in f, 'setnull': 'setnull' in f, 'noidx': 'noidx' in f,
     }
 
 
@@ -30,6 +30,11 @@ names = [t[0] for t in TBL]
 
 
 def colnames(t): return [x[0] for x in by[t][2]]
+
+
+def pkname(t):
+    ks = [x[0] for x in by[t][2] if parse(x[2])['pk']]
+    return ks[0]
 
 
 # ---------------------------------------------------------------- validation
@@ -54,13 +59,13 @@ for name, dom, cols, uqs, o in TBL:
             if cn not in seen: errs.append(f'{name}: unique column {cn} missing')
     for tf in o.get('tfk', []):
         col, parent = tf[0], tf[1]
-        pcol = tf[2] if len(tf) > 2 else 'id'
+        pcol = tf[2] if len(tf) > 2 else pkname(parent) if parent in by else 'id'
         if col not in seen: errs.append(f'{name}: tfk column {col} missing')
-        if 'tenant_id' not in seen: errs.append(f'{name}: tfk needs tenant_id')
+        if 'client_id' not in seen: errs.append(f'{name}: tfk needs client_id')
         if parent not in by: errs.append(f'{name}: tfk parent {parent} unknown'); continue
         pt = by[parent]
-        ok = pt[4].get('tenant_unique') or any(u[:2] == ['tenant_id', pcol] for u in pt[3])
-        if not ok: errs.append(f'{name}.{col}: parent {parent} has no UNIQUE (tenant_id, {pcol})')
+        ok = pt[4].get('client_unique') or any(u[:2] == ['client_id', pcol] for u in pt[3])
+        if not ok: errs.append(f'{name}.{col}: parent {parent} has no UNIQUE (client_id, {pcol})')
         fkflag = [parse(x[2])['fk'] for x in cols if x[0] == col][0]
         if not fkflag: errs.append(f'{name}.{col}: tfk column also needs an fk: flag (for the diagram)')
 if errs:
@@ -73,7 +78,7 @@ def visit(n, stack=()):
     seen_t.add(n)
     for cn, ty, fl, note, df in by[n][2]:
         fk = parse(fl)['fk']
-        if fk:
+        if fk and not parse(fl)['noidx']:      # created_by / updated_by / deleted_by never decide the table order
             t = fk.split('.')[0]
             if t != n and t not in stack: visit(t, stack + (n,))
     order.append(n)
@@ -95,6 +100,8 @@ out = ['-- SellMore database schema (PostgreSQL 15+)',
 out.append(read_sql('00_foundation.sql'))
 comments = []
 auto_index = []
+late_fks = []     # created_by / updated_by links to a table that is created later, added after all tables
+pos = {n: i for i, n in enumerate(order)}
 for n in order:
     name, dom, cols, uqs, o = by[n]
     tfk_cols = {t[0]: t for t in o.get('tfk', [])}
@@ -110,7 +117,10 @@ for n in order:
             if not p['n'] and not p['pk']: sql += ' NOT NULL'
             if df: sql += f' DEFAULT {df}'
             if p['uq']: sql += ' UNIQUE'
-            if p['fk'] and cn not in tfk_cols:
+            if p['fk'] and cn not in tfk_cols and p['noidx'] and pos[p['fk'].split('.')[0]] > pos[name]:
+                t, k = p['fk'].split('.')
+                late_fks.append(f'ALTER TABLE {name} ADD FOREIGN KEY ({cn}) REFERENCES {t}({k}) ON DELETE SET NULL;')
+            elif p['fk'] and cn not in tfk_cols:
                 t, k = p['fk'].split('.')
                 act = ' ON DELETE CASCADE' if p['cascade'] else (' ON DELETE SET NULL' if p['setnull'] else '')
                 sql += f' REFERENCES {t}({k}){act}'
@@ -121,12 +131,12 @@ for n in order:
         if cm: comments.append(f"COMMENT ON COLUMN {name}.{cn} IS {q(cm)};")
         lines.append((sql, ''))
     if len(pks) > 1: lines.append((f'  PRIMARY KEY ({", ".join(pks)})', ''))
-    if o.get('tenant_unique'): lines.append(('  UNIQUE (tenant_id, id)', ''))
+    if o.get('client_unique'): lines.append((f'  UNIQUE (client_id, {pkname(name)})', ''))
     for u in uqs: lines.append((f'  UNIQUE ({", ".join(u)})', ''))
     for tf in o.get('tfk', []):
         col, parent = tf[0], tf[1]
-        pcol = tf[2] if len(tf) > 2 else 'id'
-        lines.append((f'  FOREIGN KEY (tenant_id, {col}) REFERENCES {parent}(tenant_id, {pcol})', ''))
+        pcol = tf[2] if len(tf) > 2 else pkname(parent) if parent in by else 'id'
+        lines.append((f'  FOREIGN KEY (client_id, {col}) REFERENCES {parent}(client_id, {pcol})', ''))
     for ck in o.get('checks', []): lines.append((f'  CHECK ({ck})', ''))
     out.append(f'-- {DOMAINS[dom]}')
     out.append(f'CREATE TABLE {name} (')
@@ -141,16 +151,19 @@ for n in order:
     extra = ' '.join(o.get('indexes', []))
     for cn, ty, fl, note, df in cols:
         p = parse(fl)
-        if not p['fk'] or p['pk'] or cn in skip: continue
+        if not p['fk'] or p['pk'] or cn in skip or (p['noidx'] and cn not in tfk_cols): continue
         if cn in tfk_cols:
-            auto_index.append(f'CREATE INDEX idx_{name}_{cn} ON {name}(tenant_id, {cn});')
-        elif cn == 'tenant_id':
-            if (o.get('tenant_unique') or any(u[0] == 'tenant_id' for u in uqs) or tfk_cols or '{t}(tenant_id' in extra):
+            auto_index.append(f'CREATE INDEX idx_{name}_{cn} ON {name}(client_id, {cn});')
+        elif cn == 'client_id':
+            if (o.get('client_unique') or any(u[0] == 'client_id' for u in uqs) or tfk_cols or '{t}(client_id' in extra):
                 continue
             auto_index.append(f'CREATE INDEX idx_{name}_{cn} ON {name}({cn});')
         elif cn not in lead_cols:
             auto_index.append(f'CREATE INDEX idx_{name}_{cn} ON {name}({cn});')
 
+if late_fks:
+    out.append('-- Links from created_by / updated_by to a table that is created after them')
+    out += late_fks; out.append('')
 out.append('-- Column notes kept in the database')
 out += comments; out.append('')
 out.append('-- Indexes: every foreign key, plus the queries the app runs most')
@@ -164,7 +177,7 @@ out.append(read_sql('50_access.sql'))
 def roles_in(rs): return 'app_role() IN (' + ', '.join(q(r) for r in rs) + ')'
 out.append('-- ================================================================')
 out.append('-- Row level security. The API connects as sellmore_app and sets, per transaction:')
-out.append("--   SET LOCAL app.user_id = '<uuid>'; SET LOCAL app.tenant_id = '<uuid>'; SET LOCAL app.role = '<role>';")
+out.append("--   SET LOCAL app.user_id = '<uuid>'; SET LOCAL app.client_id = '<uuid>'; SET LOCAL app.role = '<role>';")
 out.append('-- Every table below denies by default. A table with no policy for a command refuses that command.')
 out.append('-- ================================================================')
 for n in order:
@@ -180,17 +193,19 @@ for n in order:
         else:
             pol.append(f"CREATE POLICY {name}_select ON {name} FOR SELECT USING (app_role() IS NOT NULL)")
             pol.append(f"CREATE POLICY {name}_write ON {name} FOR ALL USING (app_role() = 'super_admin') WITH CHECK (app_role() = 'super_admin')")
-    elif mode == 'tenant':
+    elif mode == 'client':
         rd, wr = o.get('read', allr), o.get('write', allr)
-        pol.append(f"CREATE POLICY {name}_select ON {name} FOR SELECT USING (tenant_id = app_tenant_id() AND {roles_in(rd)})")
+        pol.append(f"CREATE POLICY {name}_select ON {name} FOR SELECT USING (client_id = app_client_id() AND {roles_in(rd)})")
         if wr:
-            pol.append(f"CREATE POLICY {name}_insert ON {name} FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND {roles_in(wr)})")
+            pol.append(f"CREATE POLICY {name}_insert ON {name} FOR INSERT WITH CHECK (client_id = app_client_id() AND {roles_in(wr)})")
             if not o.get('append_only'):
-                pol.append(f"CREATE POLICY {name}_update ON {name} FOR UPDATE USING (tenant_id = app_tenant_id() AND {roles_in(wr)}) WITH CHECK (tenant_id = app_tenant_id() AND {roles_in(wr)})")
-                pol.append(f"CREATE POLICY {name}_delete ON {name} FOR DELETE USING (tenant_id = app_tenant_id() AND {roles_in(wr)})")
+                pol.append(f"CREATE POLICY {name}_update ON {name} FOR UPDATE USING (client_id = app_client_id() AND {roles_in(wr)}) WITH CHECK (client_id = app_client_id() AND {roles_in(wr)})")
+                pol.append(f"CREATE POLICY {name}_delete ON {name} FOR DELETE USING (client_id = app_client_id() AND {roles_in(wr)})")
     elif isinstance(mode, tuple) and mode[0] in ('owner', 'user'):
         col = mode[1]
-        cond = f"tenant_id = app_tenant_id() AND app_can_access_owner({col})" if mode[0] == 'owner' else f"tenant_id = app_tenant_id() AND {col} = app_user_id()"
+        has_client = any(x[0] == 'client_id' for x in cols)
+        base = 'client_id = app_client_id()' if has_client else f'app_in_my_client({col})'
+        cond = f"{base} AND app_can_access_owner({col})" if mode[0] == 'owner' else f"{base} AND {col} = app_user_id()"
         pol.append(f"CREATE POLICY {name}_select ON {name} FOR SELECT USING ({cond})")
         if o.get('write', True):
             pol.append(f"CREATE POLICY {name}_insert ON {name} FOR INSERT WITH CHECK ({cond})")
@@ -198,7 +213,7 @@ for n in order:
             pol.append(f"CREATE POLICY {name}_delete ON {name} FOR DELETE USING ({cond})")
     elif isinstance(mode, tuple) and mode[0] == 'child':
         _, parent, fkcol = mode
-        cond = f"EXISTS (SELECT 1 FROM {parent} p WHERE p.id = {name}.{fkcol})"
+        cond = f"EXISTS (SELECT 1 FROM {parent} p WHERE p.{pkname(parent)} = {name}.{fkcol})"
         pol.append(f"CREATE POLICY {name}_access ON {name} FOR ALL USING ({cond}) WITH CHECK ({cond})")
     elif mode == 'custom':
         pol += o['policies']
@@ -212,6 +227,14 @@ out.append('-- updated_at is set by the database, never trusted from the client'
 for n in order:
     if 'updated_at' in colnames(n):
         out.append(f'CREATE TRIGGER trg_{n}_updated BEFORE UPDATE ON {n} FOR EACH ROW EXECUTE FUNCTION set_updated_at();')
+out.append('')
+out.append('-- created_by / updated_by / deleted_by are stamped from the session by the database, never trusted from the client')
+for n in order:
+    by_cols = [x for x in by[n][2] if x[0] in ('created_by', 'updated_by', 'deleted_by')]
+    if by_cols:
+        fk0 = parse(by_cols[0][2])['fk'] or ''
+        actor = 'platform' if fk0.startswith('platform_owner_users') else 'client'
+        out.append(f"CREATE TRIGGER trg_{n}_audit BEFORE INSERT OR UPDATE ON {n} FOR EACH ROW EXECUTE FUNCTION set_audit_columns('{actor}');")
 out.append('')
 out.append('-- Ledgers and audit trails can only grow')
 for n in order:
@@ -268,8 +291,8 @@ if _flow_problems: raise SystemExit('flow_steps.py problems:\n  ' + '\n  '.join(
 _new, _k = re.subn(r'<!--FLOW:BEGIN-->.*?<!--FLOW:END-->', lambda m: '<!--FLOW:BEGIN-->\n' + _fl + '\n    <!--FLOW:END-->', open(html_path).read(), count=1, flags=re.S)
 if _k: open(html_path, 'w').write(_new)
 # ---------------------------------------------------------------- RELATIONS.md
-from relations_notes import PURPOSE, REL, TENANT, HEAD, TAIL
-rel_rows, tenant_group, tfk_list, problems, used = {}, {}, [], [], set()
+from relations_notes import PURPOSE, REL, CLIENT, HEAD, TAIL
+rel_rows, client_group, tfk_list, problems, used = {}, {}, [], [], set()
 for name, dom, cols, uqs, o in TBL:
     if name not in PURPOSE: problems.append(f'no purpose for table {name}')
     tfk_cols = {t[0] for t in o.get('tfk', [])}
@@ -279,9 +302,14 @@ for name, dom, cols, uqs, o in TBL:
         if not p['fk']: continue
         key = f'{name}.{cn}'
         ptable, pcol = p['fk'].split('.')
-        if cn == 'tenant_id' and ptable == 'tenants' and not p['n'] and p['cascade'] and key not in TENANT:
-            tenant_group.setdefault(dom, []).append(name); continue
-        text = TENANT.get(key) or REL.get(key)
+        if cn == 'client_id' and ptable == 'clients' and not p['n'] and p['cascade'] and key not in CLIENT:
+            client_group.setdefault(dom, []).append(name); continue
+        text = CLIENT.get(key) or REL.get(key)
+        if not text and p['noidx']:
+            who = 'platform owner' if ptable == 'platform_owner_users' else 'client user'
+            text = {'created_by': f'The {who} who created the row. Empty when a sync, an import or an AI job did.',
+                    'updated_by': f'The {who} who last changed the row. Empty when the system did.',
+                    'deleted_by': f'The {who} who deleted the row. Set together with `deleted_at`.'}.get(cn)
         if not text: problems.append(f'no relation note for {key}'); continue
         used.add(key)
         if cn in tfk_cols: ondel = 'Blocked'
@@ -293,9 +321,9 @@ for name, dom, cols, uqs, o in TBL:
         elif p['pk'] and len(pk_fks) >= 2: kind = 'many-to-many link'
         else: kind = 'optional' if p['n'] else 'needed'
         if cn in tfk_cols: tfk_list.append(f'`{key}` → `{ptable}`')
-        parent = f'`{ptable}`' if pcol == 'id' else f'`{ptable}.{pcol}`'
+        parent = f'`{ptable}`' if pcol == pkname(ptable) else f'`{ptable}.{pcol}`'
         rel_rows.setdefault(dom, []).append(f'| `{key}` → {parent} | {kind} | {ondel} | {"✔" if cn in tfk_cols else ""} | {text} |')
-for k in list(REL) + list(TENANT):
+for k in list(REL) + list(CLIENT):
     if k not in used: problems.append(f'note for {k} does not match any foreign key')
 for n in PURPOSE:
     if n not in by: problems.append(f'purpose given for unknown table {n}')
@@ -314,15 +342,15 @@ for dk, dn in DOMAINS.items():
     md += [f'### {dn}', '', '| Relation (child → parent) | Link | If the parent is deleted | Same company | Meaning |', '|---|---|---|---|---|']
     md += rel_rows[dk]; md.append('')
 md += ['## Company-owned tables', '',
-       'Each table below has a needed `tenant_id → tenants`. The rows are **deleted with the company**, and each table has an index that starts with `tenant_id`. '
-       'Tables with another kind of company link (`users`, `cues`, `practice_catalog`, `platform_audit_log`) are in the tables above.', '']
+       'Each table below has a needed `client_id → clients`. The rows are **deleted with the company**, and each table has an index that starts with `client_id`. '
+       'Tables with another kind of company link (`client_users`, `cues`, `practice_catalog`, `platform_audit_log`, and the tables that belong to one person through `client_user_id`) are in the tables above.', '']
 for dk, dn in DOMAINS.items():
-    if dk in tenant_group: md.append(f'- **{dn}:** ' + ', '.join(f'`{t}`' for t in tenant_group[dk]))
+    if dk in client_group: md.append(f'- **{dn}:** ' + ', '.join(f'`{t}`' for t in client_group[dk]))
 md += ['', f'## Same-company keys ({len(tfk_list)})', '',
-       'These links are composite keys on `(tenant_id, id)`, so a row can never point at another company\'s row:', '',
+       'These links are composite keys on `(client_id, <the table\'s own id>)`, so a row can never point at another company\'s row:', '',
        ', '.join(tfk_list), '', TAIL.rstrip(), '']
 open(os.path.join(HERE, 'RELATIONS.md'), 'w').write('\n'.join(md))
-rel_count = sum(len(v) for v in rel_rows.values()) + sum(len(v) for v in tenant_group.values())
+rel_count = sum(len(v) for v in rel_rows.values()) + sum(len(v) for v in client_group.values())
 
 fks = sum(1 for n in names for x in by[n][2] if parse(x[2])['fk'])
 print('tables', len(order), '| foreign keys', fks, '| indexes', len(auto_index) + sum(len(by[n][4].get('indexes', [])) for n in order),

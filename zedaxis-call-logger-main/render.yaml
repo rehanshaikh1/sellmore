@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: zedaxis-call-logger
+    runtime: node
+    region: frankfurt
+    plan: starter          # paid so it never sleeps: a cold start would drop CallSwitch webhooks
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /ping
+    autoDeploy: true
+    envVars:
+      - key: SF_LOGIN_URL
+        value: https://zedaxis.my.salesforce.com
+      - key: SF_CLIENT_ID
+        sync: false        # consumer key of the "Zedaxis Call Logger" External Client App
+      - key: SF_CLIENT_SECRET
+        sync: false        # consumer secret of the same app
+      - key: WEBHOOK_TOKEN
+        generateValue: true  # copy this into the Auth Token of each CallSwitch One web hook
+      - key: EXT_USERS
+        # CallSwitch extension -> Salesforce user Id (Task owner); Yash, Keerthy, Ajay, Sumeet
+        value: "8001:0058d000006cu9EAAQ,8004:005P200000U1c5BIAR,8005:005Tu0000009HJNIA2,8007:005Tu00000LnWVhIAN"
+      - key: DEFAULT_OWNER_ID
+        value: "0058d000006cu9EAAQ"  # Yash; used when the record owner is inactive

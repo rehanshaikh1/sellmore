@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Read/write on the Task fields zedaxis-call-logger and the call report job use. Assigned to the logger's run-as user.</description>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Activity.Call_Number__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Activity.Call_Started__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <hasActivationRequired>false</hasActivationRequired>
+    <label>Call Logger Fields</label>
+</PermissionSet>
