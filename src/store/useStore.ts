@@ -209,8 +209,12 @@ interface AppState {
 
   // Knowledge & Doc Actions
   addKnowledgeSource: (name: string, type: KnowledgeSource['type'], sizeOrUrl: string, qaTag?: string) => void;
+  updateKnowledgeSource: (id: string, changes: Partial<Pick<KnowledgeSource, 'name' | 'type' | 'sizeOrUrl' | 'qaAssessmentTag' | 'dateAdded'>>) => void;
+  deleteKnowledgeSource: (id: string) => void;
   toggleSourceConsidered: (id: string) => void;
   addCompanyDocument: (name: string, size: string, taggedAssessment: string) => void;
+  updateCompanyDocument: (id: string, changes: { name: string; taggedAssessment: string; size?: string; uploadDate?: string }) => void;
+  deleteCompanyDocument: (id: string) => void;
   toggleDocumentConsidered: (id: string) => void;
 
   // Mock Meeting Actions
@@ -1308,10 +1312,30 @@ export const useStore = create<AppState>()(persist((set, get) => ({
     set(state => ({ knowledgeSources: [newSource, ...state.knowledgeSources] }));
   },
 
+  updateKnowledgeSource: (id, changes) => {
+    set(state => ({
+      knowledgeSources: state.knowledgeSources.map(s => s.id === id ? { ...s, ...changes } : s)
+    }));
+  },
+
+  deleteKnowledgeSource: (id: string) => {
+    set(state => ({ knowledgeSources: state.knowledgeSources.filter(s => s.id !== id) }));
+  },
+
   toggleSourceConsidered: (id: string) => {
     set(state => ({
       knowledgeSources: state.knowledgeSources.map(s => s.id === id ? { ...s, consideredForQA: !s.consideredForQA } : s)
     }));
+  },
+
+  updateCompanyDocument: (id: string, changes: { name: string; taggedAssessment: string; size?: string; uploadDate?: string }) => {
+    set(state => ({
+      companyDocuments: state.companyDocuments.map(d => d.id === id ? { ...d, ...changes } : d)
+    }));
+  },
+
+  deleteCompanyDocument: (id: string) => {
+    set(state => ({ companyDocuments: state.companyDocuments.filter(d => d.id !== id) }));
   },
 
   addCompanyDocument: (name: string, size: string, taggedAssessment: string) => {

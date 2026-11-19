@@ -411,7 +411,7 @@ export const AdminDashboard: React.FC = () => {
       </div>
 
       {/* Quick Access Modules Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Link
           to="/admin/company-docs"
           className="p-4 bg-white rounded-xl border border-slate-200/90 hover:border-blue-400 transition-all flex items-start gap-3.5 shadow-2xs hover:shadow-xs group"
@@ -425,24 +425,6 @@ export const AdminDashboard: React.FC = () => {
             </h3>
             <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
               Upload company engineering handbooks and tag them to Product Knowledge or Feasibility QA assessments.
-            </p>
-          </div>
-        </Link>
-
-
-        <Link
-          to="/admin/automations"
-          className="p-4 bg-white rounded-xl border border-slate-200/90 hover:border-purple-400 transition-all flex items-start gap-3.5 shadow-2xs hover:shadow-xs group"
-        >
-          <div className="p-2.5 rounded-lg bg-purple-50 text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors shrink-0">
-            <Sparkles className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="font-bold text-slate-900 text-xs group-hover:text-purple-600 transition-colors tracking-tight">
-              AI Workflows & Automations (V2)
-            </h3>
-            <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-              Configure trigger → condition → action nodes for meeting summaries, pre-call briefs, and email drafts.
             </p>
           </div>
         </Link>

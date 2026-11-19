@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/useStore';
 import { useAccess } from '../../store/useAccess';
 import {
@@ -17,12 +17,13 @@ import {
   Search,
   AlertTriangle
 } from 'lucide-react';
-import { SalesCue } from '../../types';
+import { SalesCue, TranscriptSnippet, LessonSpec } from '../../types';
 import { SOURCE_LABELS } from '../../components/common/SourceBadge';
 import { LinkDealControl } from '../../components/common/LinkDealControl';
-import { LessonBuilderPanel } from '../../components/practice/LessonBuilderPanel';
+import { newSpecId } from '../../lib/lessonBuilder';
+import { cueName } from '../../data/practiceLessons';
 
-type TabKey = 'overview' | 'scorecard' | 'cues' | 'objections' | 'transcript' | 'improve';
+type TabKey = 'overview' | 'cues' | 'transcript';
 
 /* ------------------------------------------------------------------ */
 /* helpers                                                             */
@@ -62,6 +63,62 @@ const rating = (score: number) => RATINGS[Math.max(0, Math.min(5, Math.round(sco
 
 const scoreBand = (percent: number) =>
   percent >= 80 ? 'Strong' : percent >= 65 ? 'Solid' : percent >= 50 ? 'Needs improvement' : 'At risk';
+
+/** How an objection reply is judged, in plain words. */
+const OBJECTION_VERDICT = {
+  'Resolved': {
+    label: 'Correct',
+    mark: '✓',
+    detail: "The rep's reply answered the buyer's concern.",
+    next: 'Could be even stronger',
+    box: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+    chip: 'border-emerald-200 bg-emerald-50 text-emerald-700'
+  },
+  'Partially Resolved': {
+    label: 'Partly correct',
+    mark: '~',
+    detail: 'The reply helped, but part of the concern was left open.',
+    next: 'Add this to close it',
+    box: 'border-amber-200 bg-amber-50 text-amber-900',
+    chip: 'border-amber-200 bg-amber-50 text-amber-800'
+  },
+  'Unresolved': {
+    label: 'Wrong',
+    mark: '✗',
+    detail: "The reply did not answer the buyer's concern, so the objection stayed open.",
+    next: 'Say this instead',
+    box: 'border-rose-200 bg-rose-50 text-rose-900',
+    chip: 'border-rose-200 bg-rose-50 text-rose-700'
+  }
+} as const;
+
+/** Lower-case, strip quotes and ellipses, so a quoted excerpt can be compared with a transcript line. */
+const normText = (s: string) =>
+  s.toLowerCase().replace(/[“”"'‘’]/g, '').replace(/\.{2,}|…/g, ' ').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * Finds the transcript turn an excerpt came from. Exact containment first, then the turn
+ * that shares the most words with the excerpt (needs at least half of them to count).
+ */
+const findTurn = (text: string, turns: TranscriptSnippet[]): TranscriptSnippet | undefined => {
+  const needle = normText(text);
+  if (!needle || turns.length === 0) return undefined;
+  const exact = turns.find(t => {
+    const hay = normText(t.text);
+    return hay.includes(needle) || (hay.length > 20 && needle.includes(hay));
+  });
+  if (exact) return exact;
+  const words = Array.from(new Set(needle.split(' ').filter(w => w.length > 3)));
+  if (words.length === 0) return undefined;
+  let best: TranscriptSnippet | undefined;
+  let bestScore = 0;
+  turns.forEach(t => {
+    const hay = new Set(normText(t.text).split(' '));
+    const score = words.filter(w => hay.has(w)).length / words.length;
+    if (score > bestScore) { bestScore = score; best = t; }
+  });
+  return bestScore >= 0.5 ? best : undefined;
+};
 
 const highlight = (text: string, query: string) => {
   const q = query.trim();
@@ -137,19 +194,23 @@ const BulletList: React.FC<{ items: string[]; marker: string; empty: string }> =
 
 export const MeetingReportPage: React.FC = () => {
   const { meetingId } = useParams<{ meetingId: string }>();
-  const { meetings, currentRole, retryMeetingAnalysis } = useStore();
+  const { meetings, currentRole, retryMeetingAnalysis, practiceLessons, addPracticeLessons, currentUser } = useStore();
+  const navigate = useNavigate();
   const { canAccess } = useAccess();
 
   const meeting = meetings.find(m => m.id === meetingId);
 
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
-  const [expandedCue, setExpandedCue] = useState<number | null>(null);
+  const [pickedCues, setPickedCues] = useState<number[]>([]);
+  const [cueView, setCueView] = useState<'cues' | 'objections'>('cues');
   const [cueFilter, setCueFilter] = useState<'all' | 'gaps' | 'meets' | 'strong'>('all');
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [copiedTranscript, setCopiedTranscript] = useState(false);
   const [transcriptSearch, setTranscriptSearch] = useState('');
   const [speakerFilter, setSpeakerFilter] = useState<'all' | 'rep' | 'buyer'>('all');
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
+  // The transcript line a cue's excerpt or an objection points to; shown highlighted.
+  const [focusTurn, setFocusTurn] = useState<{ turnId: string; label: string } | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
 
@@ -159,11 +220,13 @@ export const MeetingReportPage: React.FC = () => {
   // Start fresh when a different meeting is opened.
   useEffect(() => {
     setActiveTab('overview');
-    setExpandedCue(null);
     setPlayhead(0);
     setIsPlaying(false);
     setTranscriptSearch('');
     setSpeakerFilter('all');
+    setFocusTurn(null);
+    setCueView('cues');
+    setPickedCues([]);
   }, [meetingId]);
 
   // Preview playback advances the playhead one second at a time.
@@ -221,6 +284,13 @@ export const MeetingReportPage: React.FC = () => {
     if (isPlaying && activeTab === 'transcript' && currentTurnId) scrollToTurn(currentTurnId);
   }, [currentTurnId, isPlaying, activeTab]);
 
+  // Arriving from a cue or objection: bring the highlighted line into view.
+  useEffect(() => {
+    if (activeTab !== 'transcript' || !focusTurn) return;
+    const timer = window.setTimeout(() => scrollToTurn(focusTurn.turnId), 60);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, focusTurn]);
+
   // Not found, or owned by a rep outside this user's scope: same response either way.
   if (!meeting || !canAccess(meeting.representativeId)) {
     return (
@@ -256,9 +326,67 @@ export const MeetingReportPage: React.FC = () => {
 
   const seek = (seconds: number) => setPlayhead(Math.max(0, Math.min(totalSeconds, seconds)));
 
+  /** Opens the transcript at the turn an excerpt came from, highlighted. */
+  const showInTranscript = (turn: TranscriptSnippet | undefined, label: string) => {
+    if (!turn) return;
+    setSpeakerFilter('all');
+    setTranscriptSearch('');
+    setFocusTurn({ turnId: turn.id, label });
+    seek(toSeconds(turn.timestamp));
+    setActiveTab('transcript');
+  };
+
+  const turnForCue = (cue: SalesCue) => findTurn(cue.evidence, transcript);
+  // An objection is always something the buyer said, so only buyer lines are ever matched.
+  const buyerTurns = transcript.filter(t => t.role !== 'rep');
+  const turnForObjection = (obj: { objection: string; timestamp: string }) =>
+    findTurn(obj.objection, buyerTurns) ??
+    [...buyerTurns].reverse().find(t => toSeconds(t.timestamp) <= toSeconds(obj.timestamp));
+
+  /** Creates (or reuses) one practice lesson covering the given cues, then opens it. */
+  const practiseCues = (ids: number[]) => {
+    const sorted = Array.from(new Set(ids)).sort((x, y) => x - y);
+    if (sorted.length === 0) return;
+    const existing = practiceLessons.find(l =>
+      l.meetingId === meeting?.id && l.cueIds.length === sorted.length && l.cueIds.every(id => sorted.includes(id))
+    );
+    if (existing) {
+      navigate(`/${rolePrefix}/practice?lesson=${existing.id}`);
+      return;
+    }
+    const title = sorted.length <= 2
+      ? sorted.map(cueName).join(' & ')
+      : `${cueName(sorted[0])}, ${cueName(sorted[1])} and ${sorted.length - 2} more`;
+    const detail = sorted.map(id => {
+      const c = cues.find(x => x.id === id);
+      return c ? `${cueName(id)} ${c.score}/5` : cueName(id);
+    }).join(', ');
+    const spec: LessonSpec = {
+      id: newSpecId(),
+      title,
+      cueIds: sorted,
+      origin: 'meeting',
+      method: 'checklist',
+      meetingId: meeting?.id,
+      meetingName: meeting?.name,
+      context: `Built from "${meeting?.name}": ${detail}.`,
+      ownerId: meeting?.representativeId ?? currentUser.id,
+      assignedByName: currentUser.id !== meeting?.representativeId && currentRole === 'manager' ? currentUser.name : undefined,
+      createdAt: new Date().toISOString().slice(0, 10)
+    };
+    addPracticeLessons([spec]);
+    navigate(`/${rolePrefix}/practice?lesson=${spec.id}`);
+  };
+
+  const togglePicked = (id: number) =>
+    setPickedCues(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  /** Opens the cue analysis scrolled to one cue. */
   const openCue = (id: number) => {
-    setExpandedCue(id);
-    setActiveTab('scorecard');
+    setCueFilter('all');
+    setCueView('cues');
+    setActiveTab('cues');
+    window.setTimeout(() => document.getElementById(`cue-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   };
 
   const filteredTranscript = transcript.filter(t =>
@@ -273,16 +401,8 @@ export const MeetingReportPage: React.FC = () => {
 
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: 'overview', label: 'Overview' },
-    { key: 'scorecard', label: 'Scorecard', count: cues.length || undefined },
-    { key: 'cues', label: 'Cue analysis' },
-    { key: 'objections', label: 'Objections', count: objections.length || undefined },
+    { key: 'cues', label: 'Cue analysis', count: (cues.length + objections.length) || undefined },
     { key: 'transcript', label: 'Transcript' },
-    { key: 'improve', label: 'Improvement areas' }
-  ];
-
-  const improvePoints = [
-    ...(meeting.whereRepStruggled || []).map(text => ({ kind: 'Observed gap', text })),
-    ...(meeting.whatCouldBeBetter || []).map(text => ({ kind: 'Opportunity', text }))
   ];
 
   const sourceLabel = SOURCE_LABELS[meeting.source ?? 'upload'];
@@ -351,7 +471,7 @@ export const MeetingReportPage: React.FC = () => {
               </div>
               <p className="mt-0.5 text-sm text-slate-500">
                 {meeting.processingStatus === 'Processing'
-                  ? 'The score, scorecard, objections and transcript appear here as soon as the analysis finishes.'
+                  ? 'The score, cue analysis and transcript appear here as soon as the analysis finishes.'
                   : 'This recording could not be analysed. You can run the analysis again.'}
               </p>
             </div>
@@ -484,7 +604,7 @@ export const MeetingReportPage: React.FC = () => {
 
                 <Panel
                   title="Cue performance"
-                  aside={cues.length ? <button onClick={() => setActiveTab('scorecard')} className="text-xs font-medium text-blue-700 hover:underline">View scorecard</button> : undefined}
+                  aside={cues.length ? <button onClick={() => setActiveTab('cues')} className="text-xs font-medium text-blue-700 hover:underline">View cue analysis</button> : undefined}
                   className="h-fit"
                 >
                   {cues.length ? (
@@ -509,81 +629,33 @@ export const MeetingReportPage: React.FC = () => {
               </div>
             )}
 
-            {/* Scorecard */}
-            {activeTab === 'scorecard' && (
-              cues.length === 0 ? (
-                <Empty title="No cue scores for this recording" text="This call was analysed, but a cue-by-cue scorecard is not available for it." />
-              ) : (
-                <Panel>
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                        <th className="w-14 py-3 pl-5 font-semibold">No.</th>
-                        <th className="py-3 font-semibold">Sales cue</th>
-                        <th className="hidden py-3 font-semibold sm:table-cell">Score</th>
-                        <th className="hidden py-3 font-semibold md:table-cell">Rating</th>
-                        <th className="w-12 py-3 pr-5" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {cues.map(cue => {
-                        const open = expandedCue === cue.id;
-                        return (
-                          <React.Fragment key={cue.id}>
-                            <tr
-                              onClick={() => setExpandedCue(open ? null : cue.id)}
-                              className={`cursor-pointer border-b border-slate-100 transition-colors ${open ? 'bg-slate-50' : 'hover:bg-slate-50/70'}`}
-                            >
-                              <td className="py-3.5 pl-5 text-[13px] tabular-nums text-slate-400">{String(cue.id).padStart(2, '0')}</td>
-                              <td className="py-3.5 pr-4 text-sm font-medium text-slate-900">{cue.name}</td>
-                              <td className="hidden py-3.5 pr-6 sm:table-cell">
-                                <div className="flex items-center gap-3">
-                                  <ScoreBar score={cue.score} className="w-28" />
-                                  <span className="text-[13px] font-semibold tabular-nums text-slate-900">{cue.score}/5</span>
-                                </div>
-                              </td>
-                              <td className="hidden py-3.5 pr-4 md:table-cell"><Rating score={cue.score} /></td>
-                              <td className="py-3.5 pr-5 text-right">
-                                <ChevronDown className={`ml-auto h-4 w-4 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
-                              </td>
-                            </tr>
-                            {open && (
-                              <tr className="border-b border-slate-100 bg-slate-50">
-                                <td />
-                                <td colSpan={4} className="pb-5 pr-5 pt-1">
-                                  <p className="mb-4 text-[13px] text-slate-500">{cue.evaluationFocus}</p>
-                                  <div className="grid gap-5 md:grid-cols-3">
-                                    <div>
-                                      <FieldLabel>Evidence from the call</FieldLabel>
-                                      <p className="mt-1.5 border-l-2 border-slate-300 pl-3 text-[13px] italic leading-6 text-slate-700">{cue.evidence}</p>
-                                    </div>
-                                    <div>
-                                      <FieldLabel>Observation</FieldLabel>
-                                      <p className="mt-1.5 text-[13px] leading-6 text-slate-700">{cue.observation}</p>
-                                    </div>
-                                    <div>
-                                      <FieldLabel>How to improve</FieldLabel>
-                                      <p className="mt-1.5 text-[13px] leading-6 text-slate-700">{cue.improvement}</p>
-                                    </div>
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </React.Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </Panel>
-              )
-            )}
-
             {/* Cue analysis */}
             {activeTab === 'cues' && (
-              cues.length === 0 ? (
+              cues.length === 0 && objections.length === 0 ? (
                 <Empty title="No cue analysis" text="This recording has no cue-by-cue analysis." />
               ) : (
                 <div className="space-y-5">
+                  {/* Two sections: the cues, and how objections were handled */}
+                  <div className="flex gap-6 border-b border-slate-200 text-sm">
+                    {([
+                      ['cues', 'Cues', cues.length],
+                      ['objections', 'Objections', objections.length]
+                    ] as const).map(([key, label, count]) => (
+                      <button
+                        key={key}
+                        onClick={() => setCueView(key)}
+                        className={`-mb-px border-b-2 pb-2.5 font-medium transition-colors ${
+                          cueView === key ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800'
+                        }`}
+                      >
+                        {label} <span className="ml-1 text-xs tabular-nums text-slate-400">{count}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {cueView === 'cues' && (cues.length === 0 ? (
+                    <Empty title="No cue scores" text="This recording has no cue-by-cue scores." />
+                  ) : (<>
                   <div className="inline-flex rounded-md border border-slate-200 bg-white p-0.5 text-[13px]">
                     {([
                       ['all', 'All', cues.length],
@@ -606,15 +678,43 @@ export const MeetingReportPage: React.FC = () => {
                   {visibleCues.length === 0 ? (
                     <Empty title="No cues in this group" text="Choose another filter to see the remaining cues." />
                   ) : (
+                    <>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                      <span>Tick the cues you want to practise together.</span>
+                      <button
+                        onClick={() => setPickedCues(cues.filter(c => c.score <= 3).map(c => c.id))}
+                        className="font-medium text-blue-700 hover:underline"
+                      >
+                        Select all that need work ({cues.filter(c => c.score <= 3).length})
+                      </button>
+                      <button
+                        onClick={() => setPickedCues(Array.from(new Set([...pickedCues, ...visibleCues.map(c => c.id)])))}
+                        className="font-medium text-blue-700 hover:underline"
+                      >
+                        Select shown
+                      </button>
+                      {pickedCues.length > 0 && (
+                        <button onClick={() => setPickedCues([])} className="font-medium text-slate-600 hover:underline">Clear selection</button>
+                      )}
+                    </div>
                     <Panel>
                       <div className="divide-y divide-slate-200">
                         {visibleCues.map(cue => (
-                          <article key={cue.id} className="px-5 py-5">
+                          <article key={cue.id} id={`cue-${cue.id}`} className="scroll-mt-4 px-5 py-5">
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <h3 className="text-sm font-semibold text-slate-900">
-                                <span className="mr-2 font-normal tabular-nums text-slate-400">{String(cue.id).padStart(2, '0')}</span>
-                                {cue.name}
-                              </h3>
+                              <label className="flex cursor-pointer items-center gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={pickedCues.includes(cue.id)}
+                                  onChange={() => togglePicked(cue.id)}
+                                  aria-label={`Select ${cue.name} to practise`}
+                                  className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+                                />
+                                <h3 className="text-sm font-semibold text-slate-900">
+                                  <span className="mr-2 font-normal tabular-nums text-slate-400">{String(cue.id).padStart(2, '0')}</span>
+                                  {cue.name}
+                                </h3>
+                              </label>
                               <div className="flex items-center gap-4">
                                 <Rating score={cue.score} />
                                 <span className="text-sm font-semibold tabular-nums text-slate-900">{cue.score}/5</span>
@@ -623,7 +723,18 @@ export const MeetingReportPage: React.FC = () => {
                             <div className="mt-4 grid gap-5 md:grid-cols-3">
                               <div>
                                 <FieldLabel>Spoken excerpt</FieldLabel>
-                                <p className="mt-1.5 border-l-2 border-slate-300 pl-3 text-[13px] italic leading-6 text-slate-700">{cue.evidence}</p>
+                                {turnForCue(cue) ? (
+                                  <button
+                                    onClick={() => showInTranscript(turnForCue(cue), `Cue ${String(cue.id).padStart(2, '0')} · ${cue.name}`)}
+                                    className="group mt-1.5 block w-full rounded-r border-l-2 border-slate-300 pl-3 text-left hover:border-blue-500 hover:bg-blue-50/50"
+                                    title="Show this moment in the transcript"
+                                  >
+                                    <span className="block text-[13px] italic leading-6 text-slate-700">{cue.evidence}</span>
+                                    <span className="mt-0.5 block text-xs font-medium text-blue-700 group-hover:underline">View in transcript →</span>
+                                  </button>
+                                ) : (
+                                  <p className="mt-1.5 border-l-2 border-slate-300 pl-3 text-[13px] italic leading-6 text-slate-700">{cue.evidence}</p>
+                                )}
                               </div>
                               <div>
                                 <FieldLabel>Observation</FieldLabel>
@@ -638,51 +749,90 @@ export const MeetingReportPage: React.FC = () => {
                         ))}
                       </div>
                     </Panel>
+                    {pickedCues.length > 0 && (
+                      <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-300 bg-white px-5 py-3 shadow-lg">
+                        <span className="text-sm text-slate-700">
+                          <strong className="font-semibold text-slate-900">{pickedCues.length}</strong> {pickedCues.length === 1 ? 'cue' : 'cues'} selected
+                        </span>
+                        <div className="flex items-center gap-3">
+                          <button onClick={() => setPickedCues([])} className="text-sm font-medium text-slate-500 hover:text-slate-800">Clear</button>
+                          <button
+                            onClick={() => practiseCues(pickedCues)}
+                            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                          >
+                            Practise {pickedCues.length === 1 ? 'this cue' : `these ${pickedCues.length} cues`}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    </>
+                  )}
+                  </>))}
+
+                  {/* Objection handling, second section of the cue analysis */}
+                  {cueView === 'objections' && (
+                  <Panel
+                    title={`Objection handling${objections.length ? ` · ${objections.length}` : ''}`}
+                    aside={objections.length ? (
+                      <span className="text-xs text-slate-500">
+                        {objections.filter(o => o.status === 'Resolved').length} correct · {objections.filter(o => o.status === 'Partially Resolved').length} partly · {objections.filter(o => o.status === 'Unresolved').length} wrong
+                      </span>
+                    ) : undefined}
+                  >
+                    {objections.length === 0 ? (
+                      <p className="px-5 py-8 text-center text-sm text-slate-500">The buyer did not push back on price, lead time or quality in this conversation.</p>
+                    ) : (
+                      <div className="divide-y divide-slate-200">
+                        {objections.map((obj, index) => {
+                          const turn = turnForObjection(obj);
+                          return (
+                            <article key={obj.id} className="px-5 py-5">
+                              <div className="flex flex-wrap items-center justify-between gap-3 text-[13px]">
+                                <div className="flex items-center gap-3">
+                                  <span className="font-semibold text-slate-900">Objection {index + 1}</span>
+                                  <span className="tabular-nums text-slate-500">at {obj.timestamp}</span>
+                                  <span className={`rounded border px-1.5 py-0.5 text-[11px] font-medium ${OBJECTION_VERDICT[obj.status].chip}`}>
+                                    {OBJECTION_VERDICT[obj.status].mark} {OBJECTION_VERDICT[obj.status].label}
+                                  </span>
+                                </div>
+                                {turn && (
+                                  <button
+                                    onClick={() => showInTranscript(turn, `Objection ${index + 1}`)}
+                                    className="text-xs font-medium text-blue-700 hover:underline"
+                                  >
+                                    View in transcript →
+                                  </button>
+                                )}
+                              </div>
+                              <dl className="mt-4 space-y-3 text-[13px] leading-6">
+                                <div className="grid gap-1 sm:grid-cols-[150px_1fr] sm:gap-4">
+                                  <dt className="font-medium text-slate-500">{turn ? `${turn.speaker} (buyer) said` : 'Buyer said'}</dt>
+                                  <dd className="text-slate-800">"{obj.objection}"</dd>
+                                </div>
+                                <div className="grid gap-1 sm:grid-cols-[150px_1fr] sm:gap-4">
+                                  <dt className="font-medium text-slate-500">Rep replied</dt>
+                                  <dd className="text-slate-700">"{obj.repResponse}"</dd>
+                                </div>
+                                <div className={`grid gap-1 rounded-md border px-4 py-3 sm:grid-cols-[134px_1fr] sm:gap-4 ${OBJECTION_VERDICT[obj.status].box}`}>
+                                  <dt className="font-semibold">Verdict</dt>
+                                  <dd>
+                                    <strong className="font-semibold">{OBJECTION_VERDICT[obj.status].mark} {OBJECTION_VERDICT[obj.status].label}.</strong>{' '}
+                                    {OBJECTION_VERDICT[obj.status].detail}
+                                  </dd>
+                                </div>
+                                <div className="grid gap-1 rounded-md bg-slate-50 px-4 py-3 sm:grid-cols-[134px_1fr] sm:gap-4">
+                                  <dt className="font-medium text-slate-500">{OBJECTION_VERDICT[obj.status].next}</dt>
+                                  <dd className="text-slate-800">{obj.strongerResponseSuggestion}</dd>
+                                </div>
+                              </dl>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </Panel>
                   )}
                 </div>
-              )
-            )}
-
-            {/* Objections */}
-            {activeTab === 'objections' && (
-              objections.length === 0 ? (
-                <Empty title="No objections raised" text="The buyer did not push back on price, lead time or quality in this conversation." />
-              ) : (
-                <Panel>
-                  <div className="divide-y divide-slate-200">
-                    {objections.map((obj, index) => (
-                      <article key={obj.id} className="px-5 py-5">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3 text-[13px]">
-                            <span className="font-semibold text-slate-900">Objection {index + 1}</span>
-                            <button
-                              onClick={() => { seek(toSeconds(obj.timestamp)); setActiveTab('transcript'); }}
-                              className="tabular-nums text-slate-500 hover:text-blue-700 hover:underline"
-                              title="Jump to this moment"
-                            >
-                              at {obj.timestamp}
-                            </button>
-                          </div>
-                        </div>
-
-                        <dl className="mt-4 space-y-3 text-[13px] leading-6">
-                          <div className="grid gap-1 sm:grid-cols-[150px_1fr] sm:gap-4">
-                            <dt className="font-medium text-slate-500">Buyer said</dt>
-                            <dd className="text-slate-800">"{obj.objection}"</dd>
-                          </div>
-                          <div className="grid gap-1 sm:grid-cols-[150px_1fr] sm:gap-4">
-                            <dt className="font-medium text-slate-500">Rep replied</dt>
-                            <dd className="text-slate-700">"{obj.repResponse}"</dd>
-                          </div>
-                          <div className="grid gap-1 rounded-md bg-slate-50 px-4 py-3 sm:grid-cols-[134px_1fr] sm:gap-4">
-                            <dt className="font-medium text-slate-500">Suggested reply</dt>
-                            <dd className="text-slate-800">{obj.strongerResponseSuggestion}</dd>
-                          </div>
-                        </dl>
-                      </article>
-                    ))}
-                  </div>
-                </Panel>
               )
             )}
 
@@ -753,18 +903,26 @@ export const MeetingReportPage: React.FC = () => {
 
                   <div>
                     {/* Turns */}
+                    {focusTurn && (
+                      <div className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-5 py-2 text-xs text-amber-900">
+                        <span>Showing the moment for <strong className="font-semibold">{focusTurn.label}</strong></span>
+                        <button onClick={() => setFocusTurn(null)} className="font-medium text-amber-900 underline hover:no-underline">Clear highlight</button>
+                      </div>
+                    )}
                     <div ref={transcriptScrollRef} className="relative max-h-[640px] divide-y divide-slate-100 overflow-y-auto">
                       {filteredTranscript.length === 0 ? (
                         <p className="px-5 py-12 text-center text-sm text-slate-400">No lines match your filters.</p>
                       ) : filteredTranscript.map(item => {
                         const isRep = item.role === 'rep';
                         const isCurrent = item.id === currentTurnId;
+                        const isFocused = item.id === focusTurn?.turnId;
                         return (
                           <div
                             key={item.id}
                             data-turn={item.id}
                             className={`grid grid-cols-[64px_1fr] gap-4 border-l-2 px-5 py-3.5 transition-colors ${
-                              isCurrent ? 'border-blue-600 bg-blue-50/50' : 'border-transparent hover:bg-slate-50/70'
+                              isFocused ? 'border-amber-500 bg-amber-100/70 ring-1 ring-inset ring-amber-300'
+                                : isCurrent ? 'border-blue-600 bg-blue-50/50' : 'border-transparent hover:bg-slate-50/70'
                             }`}
                           >
                             <button
@@ -792,33 +950,6 @@ export const MeetingReportPage: React.FC = () => {
                   </div>
                 </Panel>
               )
-            )}
-
-            {/* Improvement areas */}
-            {activeTab === 'improve' && (
-              <Panel title={`Improvement areas for ${meeting.representativeName}`}>
-                {improvePoints.length === 0 ? (
-                  <p className="px-5 py-6 text-sm text-slate-500">No improvement points were recorded for this call.</p>
-                ) : (
-                  <ol className="divide-y divide-slate-200">
-                    {improvePoints.map((item, i) => (
-                      <li key={i} className="flex gap-4 px-5 py-4">
-                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-300 text-xs font-semibold tabular-nums text-slate-600">
-                          {i + 1}
-                        </span>
-                        <div>
-                          <FieldLabel>{item.kind}</FieldLabel>
-                          <p className="mt-1 text-sm leading-6 text-slate-800">{item.text}</p>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-
-                <div className="border-t border-slate-200 px-5 py-5">
-                  <LessonBuilderPanel meetings={[meeting]} origin="meeting" meeting={meeting} rolePrefix={rolePrefix} />
-                </div>
-              </Panel>
             )}
           </div>
         </>
