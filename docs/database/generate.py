@@ -1,4 +1,4 @@
-"""Builds schema.sql, schema.json and the data block of er-diagram.html from schema_def.py.
+"""Builds schema.sql, schema.json, RELATIONS.md and the data block of er-diagram.html from schema_def.py.
 
 Run from this folder:  python3 generate.py
 Hand-written SQL (functions, triggers, views, grants, seed data) lives in sql/ and is stitched in by number.
@@ -234,6 +234,63 @@ html_path = os.path.join(HERE, 'er-diagram.html')
 html = open(html_path).read()
 new, k = re.subn(r'^const DATA = .*$', lambda m: 'const DATA = ' + json.dumps(data) + ';', html, count=1, flags=re.M)
 if k: open(html_path, 'w').write(new)
+# ---------------------------------------------------------------- RELATIONS.md
+from relations_notes import PURPOSE, REL, TENANT, HEAD, TAIL
+rel_rows, tenant_group, tfk_list, problems, used = {}, {}, [], [], set()
+for name, dom, cols, uqs, o in TBL:
+    if name not in PURPOSE: problems.append(f'no purpose for table {name}')
+    tfk_cols = {t[0] for t in o.get('tfk', [])}
+    pks = [x[0] for x in cols if parse(x[2])['pk']]
+    for cn, ty, fl, note, df in cols:
+        p = parse(fl)
+        if not p['fk']: continue
+        key = f'{name}.{cn}'
+        ptable, pcol = p['fk'].split('.')
+        if cn == 'tenant_id' and ptable == 'tenants' and not p['n'] and p['cascade'] and key not in TENANT:
+            tenant_group.setdefault(dom, []).append(name); continue
+        text = TENANT.get(key) or REL.get(key)
+        if not text: problems.append(f'no relation note for {key}'); continue
+        used.add(key)
+        if cn in tfk_cols: ondel = 'Blocked'
+        elif p['cascade']: ondel = 'Deleted with it'
+        elif p['setnull']: ondel = 'Link cleared'
+        else: ondel = 'Blocked'
+        pk_fks = [x for x in cols if parse(x[2])['pk'] and parse(x[2])['fk']]
+        if len(pks) == 1 and p['pk']: kind = 'one-to-one'
+        elif p['pk'] and len(pk_fks) >= 2: kind = 'many-to-many link'
+        else: kind = 'optional' if p['n'] else 'needed'
+        if cn in tfk_cols: tfk_list.append(f'`{key}` → `{ptable}`')
+        parent = f'`{ptable}`' if pcol == 'id' else f'`{ptable}.{pcol}`'
+        rel_rows.setdefault(dom, []).append(f'| `{key}` → {parent} | {kind} | {ondel} | {"✔" if cn in tfk_cols else ""} | {text} |')
+for k in list(REL) + list(TENANT):
+    if k not in used: problems.append(f'note for {k} does not match any foreign key')
+for n in PURPOSE:
+    if n not in by: problems.append(f'purpose given for unknown table {n}')
+if problems:
+    print('\n'.join(problems)); sys.exit(1)
+
+md = [HEAD.rstrip(), '', '## Tables by area', '']
+for dk, dn in DOMAINS.items():
+    md += [f'### {dn}', '', '| Table | What it is |', '|---|---|']
+    md += [f'| `{n}` | {PURPOSE[n]} |' for n in names if by[n][1] == dk]
+    md.append('')
+md += ['## Relations by area', '',
+       'Needed / optional / one-to-one / many-to-many link describes the child side. The last column says what the link means.', '']
+for dk, dn in DOMAINS.items():
+    if dk not in rel_rows: continue
+    md += [f'### {dn}', '', '| Relation (child → parent) | Link | If the parent is deleted | Same company | Meaning |', '|---|---|---|---|---|']
+    md += rel_rows[dk]; md.append('')
+md += ['## Company-owned tables', '',
+       'Each table below has a needed `tenant_id → tenants`. The rows are **deleted with the company**, and each table has an index that starts with `tenant_id`. '
+       'Tables with another kind of company link (`users`, `cues`, `practice_catalog`, `platform_audit_log`) are in the tables above.', '']
+for dk, dn in DOMAINS.items():
+    if dk in tenant_group: md.append(f'- **{dn}:** ' + ', '.join(f'`{t}`' for t in tenant_group[dk]))
+md += ['', f'## Same-company keys ({len(tfk_list)})', '',
+       'These links are composite keys on `(tenant_id, id)`, so a row can never point at another company\'s row:', '',
+       ', '.join(tfk_list), '', TAIL.rstrip(), '']
+open(os.path.join(HERE, 'RELATIONS.md'), 'w').write('\n'.join(md))
+rel_count = sum(len(v) for v in rel_rows.values()) + sum(len(v) for v in tenant_group.values())
+
 fks = sum(1 for n in names for x in by[n][2] if parse(x[2])['fk'])
 print('tables', len(order), '| foreign keys', fks, '| indexes', len(auto_index) + sum(len(by[n][4].get('indexes', [])) for n in order),
-      '| diagram updated' if k else '| diagram NOT updated')
+      '| diagram updated' if k else '| diagram NOT updated', '| relations documented', rel_count)

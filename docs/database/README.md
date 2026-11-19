@@ -6,9 +6,11 @@ PostgreSQL 15+. 51 tables, 112 foreign keys, row level security on every table.
 |---|---|
 | `schema_def.py` | The tables, columns, keys, checks and access mode of each table. **Edit this.** |
 | `sql/*.sql` | Hand-written parts: roles, functions, triggers, views, grants, seed data. **Edit these.** |
-| `generate.py` | Builds `schema.sql`, `schema.json` and the data inside `er-diagram.html`. |
+| `relations_notes.py` | One-line meaning of every table and every foreign key. **Edit this** when you add either; the generator refuses to run without it. |
+| `generate.py` | Builds `schema.sql`, `schema.json`, `RELATIONS.md` and the data inside `er-diagram.html`. |
 | `schema.sql` | Generated. The full schema, applied in one transaction. |
 | `er-diagram.html` | The picture, with a role access table and design notes. |
+| `RELATIONS.md` | Generated reference: every table, and every relation with its meaning, delete behaviour and same-company check. |
 | `tests/verify.sql` | 56 behaviour checks (scoping, reassignment, limits, ledgers). |
 
 ```bash
