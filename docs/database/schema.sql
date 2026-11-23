@@ -19,13 +19,47 @@ END $$;
 
 -- Who is asking. The API sets these with SET LOCAL at the start of every transaction.
 CREATE FUNCTION app_user_id()   RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('app.user_id', true), '')::uuid $$;
-CREATE FUNCTION app_tenant_id() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('app.tenant_id', true), '')::uuid $$;
+CREATE FUNCTION app_client_id() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('app.client_id', true), '')::uuid $$;
 CREATE FUNCTION app_role()      RETURNS text LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('app.role', true), '') $$;
+-- The caller as a client user. Empty for a platform owner, who is not in client_users, so company rows never point at one.
+CREATE FUNCTION app_client_user_id() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT CASE WHEN app_role() = 'super_admin' THEN NULL ELSE app_user_id() END $$;
 
 CREATE FUNCTION set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN NEW.updated_at := now(); RETURN NEW; END $$;
 
--- Ledgers and audit trails are append only. A tenant purge (cascade from tenants) is the one allowed delete.
+-- Stamps created_by, updated_by and deleted_by from the session, so the API cannot forget or forge them.
+--   argument 'client'   : the actor is the signed-in client user (empty for a super admin, who is not a client user)
+--   argument 'platform' : the actor is the signed-in platform owner
+-- A session with no role (a worker, a migration) keeps the values it was given. created_by never changes after insert.
+CREATE FUNCTION set_audit_columns() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_actor uuid := CASE WHEN TG_ARGV[0] = 'platform' THEN (CASE WHEN app_role() = 'super_admin' THEN app_user_id() END) ELSE app_client_user_id() END;
+  v_new jsonb := to_jsonb(NEW);
+  v_old jsonb := CASE WHEN TG_OP = 'UPDATE' THEN to_jsonb(OLD) END;
+  v_patch jsonb := '{}'::jsonb;
+BEGIN
+  IF v_new ? 'created_by' THEN
+    IF TG_OP = 'UPDATE' THEN v_patch := v_patch || jsonb_build_object('created_by', v_old->'created_by');
+    ELSIF app_role() IS NOT NULL THEN v_patch := v_patch || jsonb_build_object('created_by', v_actor);
+    END IF;
+  END IF;
+  IF v_new ? 'updated_by' AND app_role() IS NOT NULL THEN
+    v_patch := v_patch || jsonb_build_object('updated_by', v_actor);
+  END IF;
+  IF v_new ? 'deleted_by' THEN
+    IF v_new->'deleted_at' = 'null'::jsonb THEN
+      v_patch := v_patch || jsonb_build_object('deleted_by', NULL);                    -- restored, or never deleted
+    ELSIF app_role() IS NOT NULL AND (TG_OP = 'INSERT' OR v_old->'deleted_at' = 'null'::jsonb) THEN
+      v_patch := v_patch || jsonb_build_object('deleted_by', v_actor);                 -- being deleted now
+    ELSIF TG_OP = 'UPDATE' THEN
+      v_patch := v_patch || jsonb_build_object('deleted_by', v_old->'deleted_by');     -- already deleted: keep who did it
+    END IF;
+  END IF;
+  IF v_patch <> '{}'::jsonb THEN NEW := jsonb_populate_record(NEW, v_patch); END IF;
+  RETURN NEW;
+END $$;
+
+-- Ledgers and audit trails are append only. A client purge (cascade from clients) is the one allowed delete.
 CREATE FUNCTION forbid_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN RETURN OLD; END IF;
@@ -33,11 +67,24 @@ BEGIN
 END $$;
 
 -- Platform (super admin)
+CREATE TABLE platform_owner_users (
+  platform_owner_user_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  email text NOT NULL UNIQUE,
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+  last_login_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (email = lower(email))
+);
+
+-- Platform (super admin)
 CREATE TABLE plans (
-  id text PRIMARY KEY CHECK (id IN ('free', 'starter', 'growth', 'enterprise')),
+  plan_id text PRIMARY KEY CHECK (plan_id IN ('free', 'starter', 'growth', 'enterprise')),
   name text NOT NULL,
   price_monthly numeric(12,2) NOT NULL DEFAULT 0,
   currency text NOT NULL DEFAULT 'USD',
+  trial_days int,
   seat_limit int,
   meeting_quota int,
   monthly_credits int NOT NULL DEFAULT 0,
@@ -45,26 +92,44 @@ CREATE TABLE plans (
   sort_order int NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid REFERENCES platform_owner_users(platform_owner_user_id) ON DELETE SET NULL,
+  updated_by uuid REFERENCES platform_owner_users(platform_owner_user_id) ON DELETE SET NULL,
   CHECK (price_monthly >= 0),
+  CHECK (trial_days IS NULL OR trial_days > 0),
   CHECK (seat_limit IS NULL OR seat_limit > 0),
   CHECK (monthly_credits >= 0)
 );
 
 -- Platform (super admin)
 CREATE TABLE plan_features (
-  plan_id text REFERENCES plans(id) ON DELETE CASCADE,
+  plan_id text REFERENCES plans(plan_id) ON DELETE CASCADE,
   feature_key text,
+  created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (plan_id, feature_key)
 );
 
--- Tenants & people
-CREATE TABLE tenants (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+-- Platform (super admin)
+CREATE TABLE platform_limits (
+  platform_limit_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  limit_key text NOT NULL UNIQUE,
+  limit_value jsonb NOT NULL,
+  description text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid REFERENCES platform_owner_users(platform_owner_user_id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES platform_owner_users(platform_owner_user_id) ON DELETE SET NULL,
+  CHECK (limit_key ~ '^[a-z][a-z0-9_]*$')
+);
+
+-- Clients & people
+CREATE TABLE clients (
+  client_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL UNIQUE,
   slug text NOT NULL UNIQUE,
-  plan_id text NOT NULL REFERENCES plans(id),
+  plan_id text NOT NULL REFERENCES plans(plan_id),
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
   renewal_date date,
+  trial_ends_at timestamptz,
   credit_balance int NOT NULL DEFAULT 0,
   timezone text NOT NULL DEFAULT 'UTC',
   recording_retention_days int NOT NULL DEFAULT 365,
@@ -73,19 +138,30 @@ CREATE TABLE tenants (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
+  updated_by uuid,
   CHECK (credit_balance >= 0),
   CHECK (recording_retention_days > 0),
   CHECK (slug ~ '^[a-z0-9][a-z0-9-]*$')
 );
 
--- Tenants & people
-CREATE TABLE users (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid REFERENCES tenants(id) ON DELETE CASCADE,
+-- Platform (super admin)
+CREATE TABLE platform_audit_log (
+  platform_audit_log_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_id uuid NOT NULL REFERENCES platform_owner_users(platform_owner_user_id),
+  client_id uuid REFERENCES clients(client_id) ON DELETE SET NULL,
+  action text NOT NULL,
+  detail text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Clients & people
+CREATE TABLE client_users (
+  client_user_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   manager_id uuid,
   name text NOT NULL,
   email text NOT NULL UNIQUE,
-  role text NOT NULL CHECK (role IN ('super_admin', 'client_admin', 'manager', 'sales_rep')),
+  role text NOT NULL CHECK (role IN ('client_admin', 'manager', 'sales_rep')),
   title text,
   avatar_url text,
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
@@ -95,59 +171,40 @@ CREATE TABLE users (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
-  UNIQUE (tenant_id, id),
-  UNIQUE (tenant_id, crm_user_id),
-  UNIQUE (tenant_id, phone_extension),
-  FOREIGN KEY (tenant_id, manager_id) REFERENCES users(tenant_id, id),
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  UNIQUE (client_id, client_user_id),
+  UNIQUE (client_id, crm_user_id),
+  UNIQUE (client_id, phone_extension),
+  FOREIGN KEY (client_id, manager_id) REFERENCES client_users(client_id, client_user_id),
   CHECK (email = lower(email)),
-  CHECK ((role = 'super_admin') = (tenant_id IS NULL)),
   CHECK (manager_id IS NULL OR role = 'sales_rep'),
-  CHECK (manager_id IS DISTINCT FROM id)
+  CHECK (manager_id IS DISTINCT FROM client_user_id),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
--- Platform (super admin)
-CREATE TABLE platform_limits (
-  id int PRIMARY KEY,
-  formats text NOT NULL DEFAULT 'MP4, MP3, TXT',
-  max_file_size_mb int NOT NULL DEFAULT 2048,
-  max_duration_min int NOT NULL DEFAULT 240,
-  invite_expiry_hours int NOT NULL DEFAULT 48,
-  updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  CHECK (id = 1),
-  CHECK (max_file_size_mb > 0),
-  CHECK (max_duration_min > 0),
-  CHECK (invite_expiry_hours > 0)
-);
-
--- Platform (super admin)
-CREATE TABLE platform_audit_log (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  actor_id uuid NOT NULL REFERENCES users(id),
-  tenant_id uuid REFERENCES tenants(id) ON DELETE SET NULL,
-  action text NOT NULL,
-  detail text,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-
--- Tenants & people
+-- Clients & people
 CREATE TABLE auth_identities (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  auth_identity_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES client_users(client_user_id) ON DELETE CASCADE,
+  platform_owner_user_id uuid REFERENCES platform_owner_users(platform_owner_user_id) ON DELETE CASCADE,
   provider text NOT NULL CHECK (provider IN ('password', 'google', 'microsoft', 'saml', 'oidc')),
   subject text NOT NULL,
   password_hash text,
   mfa_enabled boolean NOT NULL DEFAULT false,
   last_used_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (provider, subject),
-  CHECK (provider <> 'password' OR password_hash IS NOT NULL)
+  CHECK (provider <> 'password' OR password_hash IS NOT NULL),
+  CHECK ((user_id IS NULL) <> (platform_owner_user_id IS NULL))
 );
 
--- Tenants & people
+-- Clients & people
 CREATE TABLE invitations (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  invitation_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   email text NOT NULL,
   role text NOT NULL CHECK (role IN ('manager', 'sales_rep')),
   manager_id uuid,
@@ -156,45 +213,45 @@ CREATE TABLE invitations (
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'expired', 'revoked')),
   expires_at timestamptz NOT NULL,
   accepted_at timestamptz,
-  accepted_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  accepted_user_id uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  FOREIGN KEY (tenant_id, manager_id) REFERENCES users(tenant_id, id),
-  FOREIGN KEY (tenant_id, invited_by) REFERENCES users(tenant_id, id),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  FOREIGN KEY (client_id, manager_id) REFERENCES client_users(client_id, client_user_id),
+  FOREIGN KEY (client_id, invited_by) REFERENCES client_users(client_id, client_user_id),
   CHECK (email = lower(email)),
   CHECK (manager_id IS NULL OR role = 'sales_rep')
 );
 
--- Tenants & people
+-- Clients & people
 CREATE TABLE manager_assignments (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  rep_id uuid NOT NULL,
-  manager_id uuid,
-  assigned_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  manager_assignment_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
+  manager_id uuid REFERENCES client_users(client_user_id),
+  assigned_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
   started_at timestamptz NOT NULL DEFAULT now(),
   ended_at timestamptz,
-  FOREIGN KEY (tenant_id, rep_id) REFERENCES users(tenant_id, id),
-  FOREIGN KEY (tenant_id, manager_id) REFERENCES users(tenant_id, id)
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Tenants & people
+-- Clients & people
 CREATE TABLE notifications (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  user_id uuid NOT NULL,
+  notification_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
   type text NOT NULL,
   body text NOT NULL,
   link text,
   read_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
-  FOREIGN KEY (tenant_id, user_id) REFERENCES users(tenant_id, id)
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Tenants & people
+-- Clients & people
 CREATE TABLE audit_log (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  actor_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  audit_log_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
+  actor_id uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
   action text NOT NULL,
   entity_type text,
   entity_id uuid,
@@ -205,9 +262,9 @@ CREATE TABLE audit_log (
 
 -- Billing & credits
 CREATE TABLE credit_transactions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  credit_transaction_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
+  user_id uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
   activity text NOT NULL,
   kind text NOT NULL DEFAULT 'consume' CHECK (kind IN ('consume', 'grant', 'refund', 'adjust')),
   credits_consumed int NOT NULL,
@@ -216,15 +273,15 @@ CREATE TABLE credit_transactions (
   ref_id uuid,
   idempotency_key text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, idempotency_key),
+  UNIQUE (client_id, idempotency_key),
   CHECK (credits_consumed <> 0),
   CHECK (balance_after >= 0)
 );
 
 -- Billing & credits
 CREATE TABLE invoices (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  invoice_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   amount numeric(12,2) NOT NULL,
   currency text NOT NULL DEFAULT 'USD',
   purpose text NOT NULL,
@@ -233,14 +290,16 @@ CREATE TABLE invoices (
   issued_at timestamptz NOT NULL DEFAULT now(),
   paid_at timestamptz,
   pdf_url text,
-  UNIQUE (tenant_id, provider_invoice_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (client_id, provider_invoice_id),
   CHECK (amount >= 0)
 );
 
 -- Integrations
 CREATE TABLE integrations (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  integration_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   type text NOT NULL CHECK (type IN ('crm', 'drive')),
   provider text NOT NULL,
   status text NOT NULL DEFAULT 'disconnected' CHECK (status IN ('connected', 'disconnected', 'error')),
@@ -257,27 +316,30 @@ CREATE TABLE integrations (
   connected_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, id),
-  UNIQUE (tenant_id, type),
-  FOREIGN KEY (tenant_id, connected_by) REFERENCES users(tenant_id, id)
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  UNIQUE (client_id, integration_id),
+  UNIQUE (client_id, type),
+  FOREIGN KEY (client_id, connected_by) REFERENCES client_users(client_id, client_user_id)
 );
 
 -- Integrations
 CREATE TABLE integration_credentials (
-  integration_id uuid PRIMARY KEY REFERENCES integrations(id) ON DELETE CASCADE,
+  integration_id uuid PRIMARY KEY REFERENCES integrations(integration_id) ON DELETE CASCADE,
   access_token_enc bytea,
   refresh_token_enc bytea,
   instance_url text,
   scopes text,
   expires_at timestamptz,
   key_version int NOT NULL DEFAULT 1,
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- Integrations
 CREATE TABLE integration_sync_runs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  integration_sync_run_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   integration_id uuid NOT NULL,
   trigger_kind text NOT NULL CHECK (trigger_kind IN ('manual', 'schedule', 'webhook')),
   status text NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'success', 'partial', 'failed')),
@@ -287,13 +349,15 @@ CREATE TABLE integration_sync_runs (
   items_imported int NOT NULL DEFAULT 0,
   items_failed int NOT NULL DEFAULT 0,
   error text,
-  FOREIGN KEY (tenant_id, integration_id) REFERENCES integrations(tenant_id, id)
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY (client_id, integration_id) REFERENCES integrations(client_id, integration_id)
 );
 
 -- Integrations
 CREATE TABLE integration_events (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  integration_event_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   integration_id uuid NOT NULL,
   provider_event_id text NOT NULL,
   event_type text NOT NULL,
@@ -301,23 +365,29 @@ CREATE TABLE integration_events (
   received_at timestamptz NOT NULL DEFAULT now(),
   processed_at timestamptz,
   error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (integration_id, provider_event_id),
-  FOREIGN KEY (tenant_id, integration_id) REFERENCES integrations(tenant_id, id)
+  FOREIGN KEY (client_id, integration_id) REFERENCES integrations(client_id, integration_id)
 );
 
 -- Integrations
 CREATE TABLE crm_stage_mappings (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  crm_stage_mapping_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   crm_stage text NOT NULL,
   sellmore_stage text NOT NULL CHECK (sellmore_stage IN ('Discovery', 'Technical Review', 'Commercial Proposal', 'Negotiation', 'Closed Won', 'Closed Lost')),
-  UNIQUE (tenant_id, crm_stage)
+  created_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  UNIQUE (client_id, crm_stage)
 );
 
 -- Integrations
 CREATE TABLE crm_activities (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  crm_activity_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   integration_id uuid NOT NULL,
   external_id text NOT NULL,
   kind text NOT NULL DEFAULT 'call' CHECK (kind IN ('call', 'meeting')),
@@ -339,16 +409,16 @@ CREATE TABLE crm_activities (
   raw jsonb,
   synced_at timestamptz NOT NULL DEFAULT now(),
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, external_id),
-  FOREIGN KEY (tenant_id, integration_id) REFERENCES integrations(tenant_id, id),
-  FOREIGN KEY (tenant_id, owner_user_id) REFERENCES users(tenant_id, id)
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (client_id, external_id),
+  FOREIGN KEY (client_id, integration_id) REFERENCES integrations(client_id, integration_id),
+  FOREIGN KEY (client_id, owner_user_id) REFERENCES client_users(client_id, client_user_id)
 );
 
 -- Leads
 CREATE TABLE leads (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  owner_id uuid NOT NULL,
+  lead_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
   name text NOT NULL,
   company_name text NOT NULL,
   stage text NOT NULL CHECK (stage IN ('Discovery', 'Technical Review', 'Commercial Proposal', 'Negotiation', 'Closed Won', 'Closed Lost')),
@@ -368,17 +438,18 @@ CREATE TABLE leads (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
-  UNIQUE (tenant_id, id),
-  UNIQUE (tenant_id, crm_id),
-  FOREIGN KEY (tenant_id, owner_id) REFERENCES users(tenant_id, id),
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
   CHECK ((source = 'crm') = (crm_id IS NOT NULL)),
-  CHECK (amount IS NULL OR amount >= 0)
+  CHECK (amount IS NULL OR amount >= 0),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
 -- Leads
 CREATE TABLE lead_stakeholders (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  lead_id uuid NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  lead_stakeholder_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL REFERENCES leads(lead_id) ON DELETE CASCADE,
   name text NOT NULL,
   role text,
   company text,
@@ -386,13 +457,17 @@ CREATE TABLE lead_stakeholders (
   crm_contact_id text,
   sentiment text NOT NULL CHECK (sentiment IN ('Champion', 'Neutral', 'Skeptic', 'Decision Maker')),
   last_spoke_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
   UNIQUE (lead_id, crm_contact_id)
 );
 
 -- Meetings & analysis
 CREATE TABLE media_files (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  media_file_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   uploaded_by uuid,
   source text NOT NULL CHECK (source IN ('upload', 'drive')),
   drive_file_id text,
@@ -406,22 +481,25 @@ CREATE TABLE media_files (
   retention_until timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
-  UNIQUE (tenant_id, id),
-  UNIQUE (tenant_id, drive_file_id),
-  FOREIGN KEY (tenant_id, uploaded_by) REFERENCES users(tenant_id, id),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  UNIQUE (client_id, media_file_id),
+  UNIQUE (client_id, drive_file_id),
+  FOREIGN KEY (client_id, uploaded_by) REFERENCES client_users(client_id, client_user_id),
   CHECK ((source = 'drive') = (drive_file_id IS NOT NULL)),
-  CHECK (size_bytes IS NULL OR size_bytes >= 0)
+  CHECK (size_bytes IS NULL OR size_bytes >= 0),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
 -- Meetings & analysis
 CREATE TABLE meetings (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  rep_id uuid NOT NULL,
-  lead_id uuid,
-  integration_id uuid,
-  media_file_id uuid,
-  crm_activity_id text,
+  meeting_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
+  lead_id uuid REFERENCES leads(lead_id),
+  integration_id uuid REFERENCES integrations(integration_id),
+  media_file_id uuid REFERENCES media_files(media_file_id),
+  crm_activity_id uuid REFERENCES crm_activities(crm_activity_id),
   crm_opportunity_id text,
   name text NOT NULL,
   source text NOT NULL CHECK (source IN ('upload', 'crm', 'drive')),
@@ -442,47 +520,53 @@ CREATE TABLE meetings (
   analysed_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
-  UNIQUE (tenant_id, id),
-  UNIQUE (tenant_id, crm_activity_id),
-  UNIQUE (tenant_id, media_file_id),
-  FOREIGN KEY (tenant_id, rep_id) REFERENCES users(tenant_id, id),
-  FOREIGN KEY (tenant_id, lead_id) REFERENCES leads(tenant_id, id),
-  FOREIGN KEY (tenant_id, integration_id) REFERENCES integrations(tenant_id, id),
-  FOREIGN KEY (tenant_id, media_file_id) REFERENCES media_files(tenant_id, id),
-  FOREIGN KEY (tenant_id, crm_activity_id) REFERENCES crm_activities(tenant_id, external_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  UNIQUE (crm_activity_id),
+  UNIQUE (media_file_id),
   CHECK (overall_score IS NULL OR overall_score BETWEEN 0 AND 100),
   CHECK (source <> 'upload' OR media_file_id IS NOT NULL),
   CHECK (source <> 'crm' OR crm_activity_id IS NOT NULL),
   CHECK (source <> 'drive' OR media_file_id IS NOT NULL),
   CHECK (tags = lower(tags::text)::text[]),
-  CHECK (cardinality(tags) <= 20)
+  CHECK (cardinality(tags) <= 20),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
 -- Leads
 CREATE TABLE lead_timeline_events (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  lead_id uuid NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-  meeting_id uuid REFERENCES meetings(id) ON DELETE SET NULL,
-  author_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  lead_timeline_event_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL REFERENCES leads(lead_id) ON DELETE CASCADE,
+  meeting_id uuid REFERENCES meetings(meeting_id) ON DELETE SET NULL,
+  author_id uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
   type text NOT NULL CHECK (type IN ('meeting', 'email', 'stage_change', 'note')),
   title text NOT NULL,
   description text,
-  occurred_at timestamptz NOT NULL
+  occurred_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL
 );
 
 -- Leads
 CREATE TABLE lead_risks (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  lead_id uuid NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  lead_risk_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL REFERENCES leads(lead_id) ON DELETE CASCADE,
   text text NOT NULL,
   detected_at timestamptz NOT NULL DEFAULT now(),
-  resolved_at timestamptz
+  resolved_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL
 );
 
 -- Meetings & analysis
 CREATE TABLE analysis_runs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  analysis_run_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  meeting_id uuid NOT NULL REFERENCES meetings(meeting_id) ON DELETE CASCADE,
   kind text NOT NULL CHECK (kind IN ('transcription', 'analysis', 'rescore')),
   status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'success', 'failed')),
   model text,
@@ -494,40 +578,50 @@ CREATE TABLE analysis_runs (
   started_at timestamptz,
   finished_at timestamptz,
   error text,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- Meetings & analysis
 CREATE TABLE meeting_insights (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  meeting_insight_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  meeting_id uuid NOT NULL REFERENCES meetings(meeting_id) ON DELETE CASCADE,
   kind text NOT NULL CHECK (kind IN ('went_well', 'struggled', 'could_be_better', 'next_step')),
   body text NOT NULL,
-  position int NOT NULL
+  position int NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- Cues & knowledge
 CREATE TABLE cues (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid REFERENCES tenants(id) ON DELETE CASCADE,
+  cue_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid REFERENCES clients(client_id) ON DELETE CASCADE,
   code int,
-  overrides_cue_id uuid REFERENCES cues(id),
+  overrides_cue_id uuid REFERENCES cues(cue_id),
   name text NOT NULL,
   category text NOT NULL,
   description text,
   instructions text NOT NULL,
   enabled boolean NOT NULL DEFAULT true,
-  updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_by_owner_id uuid REFERENCES platform_owner_users(platform_owner_user_id) ON DELETE SET NULL,
   updated_at timestamptz NOT NULL DEFAULT now(),
-  CHECK (tenant_id IS NOT NULL OR code IS NOT NULL),
-  CHECK (overrides_cue_id IS NULL OR tenant_id IS NOT NULL),
-  CHECK (code IS NULL OR code BETWEEN 1 AND 12)
+  created_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  deleted_at timestamptz,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  CHECK (updated_by IS NULL OR updated_by_owner_id IS NULL),
+  CHECK (client_id IS NOT NULL OR code IS NOT NULL),
+  CHECK (overrides_cue_id IS NULL OR client_id IS NOT NULL),
+  CHECK (code IS NULL OR code BETWEEN 1 AND 12),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
 -- Meetings & analysis
 CREATE TABLE transcript_segments (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  transcript_segment_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  meeting_id uuid NOT NULL REFERENCES meetings(meeting_id) ON DELETE CASCADE,
   seq int NOT NULL,
   speaker text NOT NULL,
   speaker_role text NOT NULL CHECK (speaker_role IN ('rep', 'prospect')),
@@ -542,6 +636,8 @@ CREATE TABLE transcript_segments (
   embedding_model text,
   embedded_at timestamptz,
   tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', text)) STORED,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (meeting_id, seq),
   CHECK (tags = lower(tags::text)::text[]),
   CHECK (cardinality(tags) <= 20),
@@ -550,44 +646,49 @@ CREATE TABLE transcript_segments (
 
 -- Meetings & analysis
 CREATE TABLE meeting_cue_scores (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
-  cue_id uuid NOT NULL REFERENCES cues(id),
+  meeting_cue_score_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  meeting_id uuid NOT NULL REFERENCES meetings(meeting_id) ON DELETE CASCADE,
+  cue_id uuid NOT NULL REFERENCES cues(cue_id),
   score numeric(12,2),
   is_assessable boolean NOT NULL,
   observation text,
   improvement text,
   evidence text,
-  evidence_segment_id uuid REFERENCES transcript_segments(id) ON DELETE SET NULL,
+  evidence_segment_id uuid REFERENCES transcript_segments(transcript_segment_id) ON DELETE SET NULL,
   severity text CHECK (severity IN ('critical', 'warning', 'positive')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (meeting_id, cue_id),
   CHECK (score IS NULL OR score BETWEEN 0 AND 5)
 );
 
 -- Meetings & analysis
 CREATE TABLE meeting_objections (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  meeting_id uuid NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
-  segment_id uuid REFERENCES transcript_segments(id) ON DELETE SET NULL,
+  meeting_objection_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  meeting_id uuid NOT NULL REFERENCES meetings(meeting_id) ON DELETE CASCADE,
+  segment_id uuid REFERENCES transcript_segments(transcript_segment_id) ON DELETE SET NULL,
   at_ms int NOT NULL,
   objection text NOT NULL,
   category text CHECK (category IN ('price', 'timing', 'authority', 'competitor', 'technical', 'risk', 'other')),
   rep_response text,
   status text NOT NULL CHECK (status IN ('Resolved', 'Partially Resolved', 'Unresolved')),
-  stronger_response text
+  stronger_response text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- Meetings & analysis
 CREATE TABLE transcript_segment_cues (
-  segment_id uuid REFERENCES transcript_segments(id) ON DELETE CASCADE,
-  cue_id uuid REFERENCES cues(id),
+  segment_id uuid REFERENCES transcript_segments(transcript_segment_id) ON DELETE CASCADE,
+  cue_id uuid REFERENCES cues(cue_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (segment_id, cue_id)
 );
 
 -- Cues & knowledge
 CREATE TABLE knowledge_sources (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  knowledge_source_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   created_by uuid NOT NULL,
   name text NOT NULL,
   type text NOT NULL CHECK (type IN ('PDF', 'DOCX', 'TXT', 'Website', 'YouTube', 'Manual QA')),
@@ -602,23 +703,26 @@ CREATE TABLE knowledge_sources (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
-  UNIQUE (tenant_id, id),
-  FOREIGN KEY (tenant_id, created_by) REFERENCES users(tenant_id, id),
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  UNIQUE (client_id, knowledge_source_id),
+  FOREIGN KEY (client_id, created_by) REFERENCES client_users(client_id, client_user_id),
   CHECK (tags = lower(tags::text)::text[]),
-  CHECK (cardinality(tags) <= 20)
+  CHECK (cardinality(tags) <= 20),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
 -- Cues & knowledge
 CREATE TABLE company_documents (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  company_document_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   uploaded_by uuid NOT NULL,
   name text NOT NULL,
   size_bytes bigint,
   mime_type text,
   storage_key text NOT NULL,
   checksum_sha256 text,
-  tagged_cue_id uuid REFERENCES cues(id) ON DELETE SET NULL,
+  tagged_cue_id uuid REFERENCES cues(cue_id) ON DELETE SET NULL,
   tags text[] NOT NULL DEFAULT '{}',
   raw_text text,
   embeddings halfvec(1536),
@@ -629,18 +733,22 @@ CREATE TABLE company_documents (
   uploaded_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
-  UNIQUE (tenant_id, id),
-  FOREIGN KEY (tenant_id, uploaded_by) REFERENCES users(tenant_id, id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  UNIQUE (client_id, company_document_id),
+  FOREIGN KEY (client_id, uploaded_by) REFERENCES client_users(client_id, client_user_id),
   CHECK (tags = lower(tags::text)::text[]),
-  CHECK (cardinality(tags) <= 20)
+  CHECK (cardinality(tags) <= 20),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
 -- Cues & knowledge
 CREATE TABLE knowledge_chunks (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  source_id uuid REFERENCES knowledge_sources(id) ON DELETE CASCADE,
-  document_id uuid REFERENCES company_documents(id) ON DELETE CASCADE,
+  knowledge_chunk_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
+  source_id uuid REFERENCES knowledge_sources(knowledge_source_id) ON DELETE CASCADE,
+  document_id uuid REFERENCES company_documents(company_document_id) ON DELETE CASCADE,
   seq int NOT NULL,
   content text NOT NULL,
   token_count int,
@@ -648,23 +756,26 @@ CREATE TABLE knowledge_chunks (
   embedding_model text,
   embedded_at timestamptz,
   tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK ((source_id IS NULL) <> (document_id IS NULL))
 );
 
 -- Cues & knowledge
 CREATE TABLE knowledge_citations (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  source_id uuid NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
-  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
-  meeting_id uuid REFERENCES meetings(id) ON DELETE SET NULL,
+  knowledge_citation_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_id uuid NOT NULL REFERENCES knowledge_sources(knowledge_source_id) ON DELETE CASCADE,
+  user_id uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  meeting_id uuid REFERENCES meetings(meeting_id) ON DELETE SET NULL,
   used_by text NOT NULL CHECK (used_by IN ('ask_ai', 'ai_chat', 'live_assist', 'mock', 'practice')),
-  cited_at timestamptz NOT NULL DEFAULT now()
+  cited_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Practice & coaching
+-- Practice
 CREATE TABLE practice_catalog (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid REFERENCES tenants(id) ON DELETE CASCADE,
+  practice_catalog_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid REFERENCES clients(client_id) ON DELETE CASCADE,
   title text NOT NULL,
   category text NOT NULL,
   description text,
@@ -675,71 +786,71 @@ CREATE TABLE practice_catalog (
   sample_prompts jsonb NOT NULL DEFAULT '[]',
   active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL
 );
 
--- Practice & coaching
+-- Practice
 CREATE TABLE practice_lessons (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  owner_id uuid NOT NULL,
-  created_by uuid NOT NULL,
-  meeting_id uuid,
-  lead_id uuid,
+  practice_lesson_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
+  created_by uuid NOT NULL REFERENCES client_users(client_user_id),
+  meeting_id uuid REFERENCES meetings(meeting_id),
+  lead_id uuid REFERENCES leads(lead_id),
   origin text NOT NULL CHECK (origin IN ('meeting', 'lead')),
   method text NOT NULL CHECK (method IN ('checklist', 'ai')),
   title text NOT NULL,
   context text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, id),
-  FOREIGN KEY (tenant_id, owner_id) REFERENCES users(tenant_id, id),
-  FOREIGN KEY (tenant_id, created_by) REFERENCES users(tenant_id, id),
-  FOREIGN KEY (tenant_id, meeting_id) REFERENCES meetings(tenant_id, id),
-  FOREIGN KEY (tenant_id, lead_id) REFERENCES leads(tenant_id, id),
-  CHECK ((origin = 'meeting' AND meeting_id IS NOT NULL) OR (origin = 'lead' AND lead_id IS NOT NULL))
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  deleted_at timestamptz,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  CHECK ((origin = 'meeting' AND meeting_id IS NOT NULL) OR (origin = 'lead' AND lead_id IS NOT NULL)),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
--- Practice & coaching
+-- Practice
 CREATE TABLE practice_lesson_cues (
-  lesson_id uuid REFERENCES practice_lessons(id) ON DELETE CASCADE,
-  cue_id uuid REFERENCES cues(id),
+  lesson_id uuid REFERENCES practice_lessons(practice_lesson_id) ON DELETE CASCADE,
+  cue_id uuid REFERENCES cues(cue_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (lesson_id, cue_id)
 );
 
--- Practice & coaching
-CREATE TABLE coaching_programs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  lead_id uuid NOT NULL,
-  rep_id uuid NOT NULL,
+-- Practice
+CREATE TABLE practice_programs (
+  practice_program_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL REFERENCES leads(lead_id),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
   status text NOT NULL DEFAULT 'ready_to_start' CHECK (status IN ('ready_to_start', 'in_progress', 'completed')),
   progress_pct int NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, id),
-  UNIQUE (lead_id, rep_id),
-  FOREIGN KEY (tenant_id, lead_id) REFERENCES leads(tenant_id, id),
-  FOREIGN KEY (tenant_id, rep_id) REFERENCES users(tenant_id, id),
+  created_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  UNIQUE (lead_id, client_user_id),
   CHECK (progress_pct BETWEEN 0 AND 100)
 );
 
--- Practice & coaching
-CREATE TABLE coaching_program_meetings (
-  program_id uuid REFERENCES coaching_programs(id) ON DELETE CASCADE,
-  meeting_id uuid REFERENCES meetings(id) ON DELETE CASCADE,
+-- Practice
+CREATE TABLE practice_program_meetings (
+  program_id uuid REFERENCES practice_programs(practice_program_id) ON DELETE CASCADE,
+  meeting_id uuid REFERENCES meetings(meeting_id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (program_id, meeting_id)
 );
 
--- Practice & coaching
-CREATE TABLE coaching_lessons (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  program_id uuid NOT NULL REFERENCES coaching_programs(id) ON DELETE CASCADE,
+-- Practice
+CREATE TABLE practice_program_lessons (
+  practice_program_lesson_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  program_id uuid NOT NULL REFERENCES practice_programs(practice_program_id) ON DELETE CASCADE,
   position int NOT NULL,
   title text NOT NULL,
   objective text NOT NULL,
   relevance_to_deal text,
-  evidence_meeting_id uuid REFERENCES meetings(id) ON DELETE SET NULL,
+  evidence_meeting_id uuid REFERENCES meetings(meeting_id) ON DELETE SET NULL,
   tailored_explanation text,
   talk_track jsonb NOT NULL DEFAULT '[]',
   practice_activity text,
@@ -748,46 +859,43 @@ CREATE TABLE coaching_lessons (
   completed boolean NOT NULL DEFAULT false,
   completed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (program_id, position)
 );
 
--- Practice & coaching
+-- Practice
 CREATE TABLE practice_attempts (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  user_id uuid NOT NULL,
-  lesson_id uuid REFERENCES practice_lessons(id) ON DELETE CASCADE,
-  coaching_lesson_id uuid REFERENCES coaching_lessons(id) ON DELETE CASCADE,
+  practice_attempt_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
+  lesson_id uuid REFERENCES practice_lessons(practice_lesson_id) ON DELETE CASCADE,
+  program_lesson_id uuid REFERENCES practice_program_lessons(practice_program_lesson_id) ON DELETE CASCADE,
   turn_no int NOT NULL,
   response text NOT NULL,
   score int NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  FOREIGN KEY (tenant_id, user_id) REFERENCES users(tenant_id, id),
-  CHECK ((lesson_id IS NULL) <> (coaching_lesson_id IS NULL)),
+  CHECK ((lesson_id IS NULL) <> (program_lesson_id IS NULL)),
   CHECK (score BETWEEN 0 AND 100)
 );
 
--- Practice & coaching
+-- Practice
 CREATE TABLE lesson_feedback (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  rep_id uuid NOT NULL,
-  manager_id uuid NOT NULL,
-  lesson_id uuid REFERENCES practice_lessons(id) ON DELETE CASCADE,
-  coaching_lesson_id uuid REFERENCES coaching_lessons(id) ON DELETE CASCADE,
+  lesson_feedback_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
+  manager_id uuid NOT NULL REFERENCES client_users(client_user_id),
+  lesson_id uuid REFERENCES practice_lessons(practice_lesson_id) ON DELETE CASCADE,
+  program_lesson_id uuid REFERENCES practice_program_lessons(practice_program_lesson_id) ON DELETE CASCADE,
   feedback text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  FOREIGN KEY (tenant_id, rep_id) REFERENCES users(tenant_id, id),
-  FOREIGN KEY (tenant_id, manager_id) REFERENCES users(tenant_id, id),
-  CHECK ((lesson_id IS NULL) <> (coaching_lesson_id IS NULL))
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  CHECK ((lesson_id IS NULL) <> (program_lesson_id IS NULL))
 );
 
--- Practice & coaching
+-- Practice
 CREATE TABLE mock_meetings (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  rep_id uuid NOT NULL,
-  source_meeting_id uuid,
+  mock_meeting_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
+  source_meeting_id uuid REFERENCES meetings(meeting_id),
   buyer_name text NOT NULL,
   buyer_role text,
   roleplay_type text NOT NULL,
@@ -801,44 +909,49 @@ CREATE TABLE mock_meetings (
   words_per_min int,
   longest_monologue text,
   rescore_status text NOT NULL DEFAULT 'idle' CHECK (rescore_status IN ('idle', 'processing', 'rescored')),
-  FOREIGN KEY (tenant_id, rep_id) REFERENCES users(tenant_id, id),
-  FOREIGN KEY (tenant_id, source_meeting_id) REFERENCES meetings(tenant_id, id),
-  CHECK (score IS NULL OR score BETWEEN 0 AND 100)
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  CHECK (score IS NULL OR score BETWEEN 0 AND 100),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
--- Practice & coaching
+-- Practice
 CREATE TABLE mock_meeting_focus_cues (
-  mock_meeting_id uuid REFERENCES mock_meetings(id) ON DELETE CASCADE,
-  cue_id uuid REFERENCES cues(id),
+  mock_meeting_id uuid REFERENCES mock_meetings(mock_meeting_id) ON DELETE CASCADE,
+  cue_id uuid REFERENCES cues(cue_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (mock_meeting_id, cue_id)
 );
 
--- Practice & coaching
+-- Practice
 CREATE TABLE mock_meeting_points (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  mock_meeting_id uuid NOT NULL REFERENCES mock_meetings(id) ON DELETE CASCADE,
+  mock_meeting_point_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  mock_meeting_id uuid NOT NULL REFERENCES mock_meetings(mock_meeting_id) ON DELETE CASCADE,
   kind text NOT NULL CHECK (kind IN ('went_well', 'to_improve')),
-  body text NOT NULL
+  body text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Practice & coaching
+-- Practice
 CREATE TABLE live_assist_sessions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  user_id uuid NOT NULL,
-  meeting_id uuid,
+  live_assist_session_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
+  meeting_id uuid REFERENCES meetings(meeting_id),
   started_at timestamptz NOT NULL DEFAULT now(),
   ended_at timestamptz,
   notes text,
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended')),
-  FOREIGN KEY (tenant_id, user_id) REFERENCES users(tenant_id, id),
-  FOREIGN KEY (tenant_id, meeting_id) REFERENCES meetings(tenant_id, id)
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- Automation & AI
 CREATE TABLE automations (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  automation_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(client_id) ON DELETE CASCADE,
   created_by uuid NOT NULL,
   name text NOT NULL,
   description text,
@@ -851,39 +964,42 @@ CREATE TABLE automations (
   last_run_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, name),
-  FOREIGN KEY (tenant_id, created_by) REFERENCES users(tenant_id, id)
+  updated_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  deleted_at timestamptz,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  FOREIGN KEY (client_id, created_by) REFERENCES client_users(client_id, client_user_id),
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
 -- Automation & AI
 CREATE TABLE automation_runs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  automation_id uuid NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
-  meeting_id uuid REFERENCES meetings(id) ON DELETE SET NULL,
-  lead_id uuid REFERENCES leads(id) ON DELETE SET NULL,
+  automation_run_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  automation_id uuid NOT NULL REFERENCES automations(automation_id) ON DELETE CASCADE,
+  meeting_id uuid REFERENCES meetings(meeting_id) ON DELETE SET NULL,
+  lead_id uuid REFERENCES leads(lead_id) ON DELETE SET NULL,
   status text NOT NULL CHECK (status IN ('success', 'failed')),
   output text,
-  ran_at timestamptz NOT NULL DEFAULT now()
+  ran_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- Automation & AI
 CREATE TABLE chat_threads (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  user_id uuid NOT NULL,
-  lead_id uuid,
+  chat_thread_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_user_id uuid NOT NULL REFERENCES client_users(client_user_id) ON DELETE CASCADE,
+  lead_id uuid REFERENCES leads(lead_id),
   title text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, id),
-  FOREIGN KEY (tenant_id, user_id) REFERENCES users(tenant_id, id),
-  FOREIGN KEY (tenant_id, lead_id) REFERENCES leads(tenant_id, id)
+  deleted_at timestamptz,
+  deleted_by uuid REFERENCES client_users(client_user_id) ON DELETE SET NULL,
+  CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL)
 );
 
 -- Automation & AI
 CREATE TABLE chat_messages (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  thread_id uuid NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+  chat_message_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  thread_id uuid NOT NULL REFERENCES chat_threads(chat_thread_id) ON DELETE CASCADE,
   role text NOT NULL CHECK (role IN ('user', 'assistant')),
   body text NOT NULL,
   raw_text text,
@@ -896,34 +1012,53 @@ CREATE TABLE chat_messages (
   input_tokens int,
   output_tokens int,
   created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK (tags = lower(tags::text)::text[]),
   CHECK (cardinality(tags) <= 20),
   CHECK (raw_text IS NULL OR role = 'assistant')
 );
 
+-- Links from created_by / updated_by to a table that is created after them
+ALTER TABLE clients ADD FOREIGN KEY (updated_by) REFERENCES client_users(client_user_id) ON DELETE SET NULL;
+
 -- Column notes kept in the database
+COMMENT ON COLUMN platform_owner_users.email IS 'always stored lower case';
+COMMENT ON COLUMN plans.trial_days IS 'length of the free trial in days; empty = this plan has no trial';
 COMMENT ON COLUMN plans.seat_limit IS 'null = unlimited';
 COMMENT ON COLUMN plans.meeting_quota IS 'null = unlimited';
+COMMENT ON COLUMN plans.created_by IS 'the platform owner who created the row; empty when the system did it';
+COMMENT ON COLUMN plans.updated_by IS 'the platform owner who last changed the row; empty when the system did it';
 COMMENT ON COLUMN plan_features.feature_key IS 'e.g. live_assist, crm_sync, mock_meetings';
-COMMENT ON COLUMN tenants.slug IS 'url-safe short name';
-COMMENT ON COLUMN tenants.renewal_date IS 'null on the free plan';
-COMMENT ON COLUMN tenants.credit_balance IS 'changed only by consume_credits / grant_credits';
-COMMENT ON COLUMN tenants.timezone IS 'matters for scheduled imports and summaries';
-COMMENT ON COLUMN tenants.recording_retention_days IS 'how long audio is kept';
-COMMENT ON COLUMN tenants.billing_customer_id IS 'payment provider customer id';
-COMMENT ON COLUMN tenants.deleted_at IS 'soft delete: rows are hidden, not removed';
-COMMENT ON COLUMN users.tenant_id IS 'null only for super_admin';
-COMMENT ON COLUMN users.manager_id IS 'reps only: their one manager';
-COMMENT ON COLUMN users.email IS 'always stored lower case';
-COMMENT ON COLUMN users.crm_user_id IS 'Salesforce user id, matched by email on connect';
-COMMENT ON COLUMN users.phone_extension IS 'phone system extension, files calls under this person';
-COMMENT ON COLUMN users.deleted_at IS 'soft delete: rows are hidden, not removed';
-COMMENT ON COLUMN platform_limits.id IS 'always 1 (single row)';
-COMMENT ON COLUMN platform_limits.formats IS 'MP4, MP3, TXT';
+COMMENT ON COLUMN platform_limits.limit_key IS 'snake_case name of the limit, e.g. max_file_size_mb. Add a row to add a limit, no schema change';
+COMMENT ON COLUMN platform_limits.limit_value IS 'the value: a number, text, a list or true/false, as JSON';
+COMMENT ON COLUMN platform_limits.description IS 'what the limit does';
+COMMENT ON COLUMN platform_limits.created_by IS 'the platform owner who created the row; empty when the system did it';
+COMMENT ON COLUMN platform_limits.updated_by IS 'the platform owner who last changed the row; empty when the system did it';
+COMMENT ON COLUMN clients.slug IS 'url-safe short name';
+COMMENT ON COLUMN clients.renewal_date IS 'null on the free plan';
+COMMENT ON COLUMN clients.trial_ends_at IS 'when the free trial ends; empty when the client is not on a trial';
+COMMENT ON COLUMN clients.credit_balance IS 'changed only by consume_credits / grant_credits';
+COMMENT ON COLUMN clients.timezone IS 'matters for scheduled imports and summaries';
+COMMENT ON COLUMN clients.recording_retention_days IS 'how long audio is kept';
+COMMENT ON COLUMN clients.billing_customer_id IS 'payment provider customer id';
+COMMENT ON COLUMN clients.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN clients.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN client_users.manager_id IS 'reps only: their one manager';
+COMMENT ON COLUMN client_users.email IS 'always stored lower case';
+COMMENT ON COLUMN client_users.crm_user_id IS 'Salesforce user id, matched by email on connect';
+COMMENT ON COLUMN client_users.phone_extension IS 'phone system extension, files calls under this person';
+COMMENT ON COLUMN client_users.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN client_users.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN client_users.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN client_users.deleted_by IS 'the client user who deleted the row; empty when the system did it';
+COMMENT ON COLUMN auth_identities.user_id IS 'set for a client user';
+COMMENT ON COLUMN auth_identities.platform_owner_user_id IS 'set for a platform owner';
 COMMENT ON COLUMN auth_identities.subject IS 'provider user id, or the email for password';
 COMMENT ON COLUMN auth_identities.password_hash IS 'argon2id, never plain text';
 COMMENT ON COLUMN invitations.manager_id IS 'reps only';
 COMMENT ON COLUMN invitations.token_hash IS 'hash of the emailed link token';
+COMMENT ON COLUMN invitations.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN manager_assignments.client_user_id IS 'the rep';
 COMMENT ON COLUMN manager_assignments.manager_id IS 'null = unassigned';
 COMMENT ON COLUMN manager_assignments.assigned_by IS 'null = system';
 COMMENT ON COLUMN manager_assignments.ended_at IS 'null = current';
@@ -937,9 +1072,13 @@ COMMENT ON COLUMN integrations.provider_org_id IS 'Salesforce org id, to catch a
 COMMENT ON COLUMN integrations.folder_id IS 'Drive folder id';
 COMMENT ON COLUMN integrations.folder IS 'Drive folder name, e.g. Call recordings';
 COMMENT ON COLUMN integrations.sync_cursor IS 'last change seen, so a sync only fetches what is new';
+COMMENT ON COLUMN integrations.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN integrations.updated_by IS 'the client user who last changed the row; empty when the system did it';
 COMMENT ON COLUMN integration_credentials.access_token_enc IS 'encrypted with a KMS key, never plain text';
 COMMENT ON COLUMN integration_events.provider_event_id IS 'Salesforce replay id, makes webhooks idempotent';
 COMMENT ON COLUMN crm_stage_mappings.crm_stage IS 'stage name exactly as Salesforce reports it';
+COMMENT ON COLUMN crm_stage_mappings.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN crm_stage_mappings.updated_by IS 'the client user who last changed the row; empty when the system did it';
 COMMENT ON COLUMN crm_activities.external_id IS 'Salesforce Task / Event id';
 COMMENT ON COLUMN crm_activities.description IS 'holds the 5-line AI call summary';
 COMMENT ON COLUMN crm_activities.outcome IS 'answered | missed | voicemail | no_answer';
@@ -948,31 +1087,51 @@ COMMENT ON COLUMN crm_activities.what_id IS 'Opportunity id (WhatId), null when 
 COMMENT ON COLUMN crm_activities.owner_user_id IS 'resolved from owner_crm_id or the phone extension';
 COMMENT ON COLUMN crm_activities.recording_url IS 'link to the original recording in the phone system';
 COMMENT ON COLUMN crm_activities.raw IS 'untouched Salesforce payload';
+COMMENT ON COLUMN leads.client_user_id IS 'the rep who owns the deal; the company is client_users.client_id';
 COMMENT ON COLUMN leads.crm_id IS 'Salesforce Opportunity id';
 COMMENT ON COLUMN leads.raw_stage IS 'stage name exactly as Salesforce reports it';
 COMMENT ON COLUMN leads.last_meeting_at IS 'kept up to date by a trigger';
 COMMENT ON COLUMN leads.stage_changed_at IS 'drives "days in stage"';
 COMMENT ON COLUMN leads.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN leads.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN leads.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN leads.deleted_by IS 'the client user who deleted the row; empty when the system did it';
 COMMENT ON COLUMN lead_stakeholders.crm_contact_id IS 'Opportunity Contact Role is per opportunity, contacts are never merged across deals';
+COMMENT ON COLUMN lead_stakeholders.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN lead_stakeholders.updated_by IS 'the client user who last changed the row; empty when the system did it';
 COMMENT ON COLUMN media_files.uploaded_by IS 'null for files fetched from Drive';
 COMMENT ON COLUMN media_files.drive_file_name IS 'file name, used to match the audio to a CRM call';
 COMMENT ON COLUMN media_files.storage_key IS 'object store key of our copy';
 COMMENT ON COLUMN media_files.retention_until IS 'audio is deleted after this date';
 COMMENT ON COLUMN media_files.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN media_files.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN media_files.deleted_by IS 'the client user who deleted the row; empty when the system did it';
+COMMENT ON COLUMN meetings.client_user_id IS 'the rep the call belongs to; the company is client_users.client_id';
 COMMENT ON COLUMN meetings.lead_id IS 'null = call without a lead';
 COMMENT ON COLUMN meetings.integration_id IS 'where it was fetched from';
 COMMENT ON COLUMN meetings.media_file_id IS 'null while the audio has not arrived yet';
-COMMENT ON COLUMN meetings.crm_activity_id IS 'Salesforce Task / Event id, blocks duplicate imports';
+COMMENT ON COLUMN meetings.crm_activity_id IS 'the Salesforce call record it came from, blocks duplicate imports';
 COMMENT ON COLUMN meetings.meeting_at IS 'when the call happened';
 COMMENT ON COLUMN meetings.overall_score IS '0-100';
 COMMENT ON COLUMN meetings.tags IS 'labels for filtering: lower case, at most 20';
 COMMENT ON COLUMN meetings.summary_embeddings IS 'meaning vector of the summary, to find similar calls, filled by a worker; empty until then or for very short text';
 COMMENT ON COLUMN meetings.embedding_model IS 'model that made the vector, so it can be redone';
 COMMENT ON COLUMN meetings.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN meetings.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN meetings.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN meetings.deleted_by IS 'the client user who deleted the row; empty when the system did it';
+COMMENT ON COLUMN lead_timeline_events.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN lead_risks.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN lead_risks.updated_by IS 'the client user who last changed the row; empty when the system did it';
 COMMENT ON COLUMN analysis_runs.raw_output IS 'the model''s full reply as returned, for audit and re-parsing. Cleared when the recording expires';
-COMMENT ON COLUMN cues.tenant_id IS 'null = platform default';
+COMMENT ON COLUMN cues.client_id IS 'null = platform default';
 COMMENT ON COLUMN cues.code IS '1-12 on platform defaults';
 COMMENT ON COLUMN cues.overrides_cue_id IS 'company copy replacing a default';
+COMMENT ON COLUMN cues.updated_by IS 'the client user who last edited it';
+COMMENT ON COLUMN cues.updated_by_owner_id IS 'the platform owner who last edited a platform default';
+COMMENT ON COLUMN cues.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN cues.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN cues.deleted_by IS 'the client user who deleted the row; empty when the system did it';
 COMMENT ON COLUMN transcript_segments.text IS 'cleaned text, what users read';
 COMMENT ON COLUMN transcript_segments.raw_text IS 'speech-to-text output exactly as returned, before cleanup. Cleared when the recording expires';
 COMMENT ON COLUMN transcript_segments.asr_confidence IS '0 to 1, from the speech-to-text engine';
@@ -987,6 +1146,8 @@ COMMENT ON COLUMN knowledge_sources.tags IS 'labels for filtering: lower case, a
 COMMENT ON COLUMN knowledge_sources.raw_text IS 'full text extracted from the file or page, before it is cut into chunks';
 COMMENT ON COLUMN knowledge_sources.content_hash IS 'sha256 of the content, blocks adding the same thing twice';
 COMMENT ON COLUMN knowledge_sources.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN knowledge_sources.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN knowledge_sources.deleted_by IS 'the client user who deleted the row; empty when the system did it';
 COMMENT ON COLUMN company_documents.tagged_cue_id IS 'which cue it grounds';
 COMMENT ON COLUMN company_documents.tags IS 'labels for filtering: lower case, at most 20';
 COMMENT ON COLUMN company_documents.raw_text IS 'full text extracted from the file, before it is cut into chunks';
@@ -994,22 +1155,40 @@ COMMENT ON COLUMN company_documents.embeddings IS 'meaning vector of the whole d
 COMMENT ON COLUMN company_documents.embedding_model IS 'model that made the vector, so it can be redone';
 COMMENT ON COLUMN company_documents.considered IS 'used in scoring';
 COMMENT ON COLUMN company_documents.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN company_documents.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN company_documents.deleted_by IS 'the client user who deleted the row; empty when the system did it';
 COMMENT ON COLUMN knowledge_chunks.embeddings IS 'meaning vector of this chunk, filled by a worker; empty until then or for very short text';
 COMMENT ON COLUMN knowledge_chunks.embedding_model IS 'model that made the vector, so it can be redone';
-COMMENT ON COLUMN practice_catalog.tenant_id IS 'null = platform catalogue';
+COMMENT ON COLUMN practice_catalog.client_id IS 'null = platform catalogue';
 COMMENT ON COLUMN practice_catalog.sample_prompts IS 'list of prompt strings';
-COMMENT ON COLUMN practice_lessons.owner_id IS 'rep who practises';
+COMMENT ON COLUMN practice_catalog.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN practice_catalog.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN practice_lessons.client_user_id IS 'rep who practises';
 COMMENT ON COLUMN practice_lessons.created_by IS 'rep or manager';
-COMMENT ON COLUMN coaching_lessons.evidence_meeting_id IS 'the call the lesson comes from';
-COMMENT ON COLUMN coaching_lessons.talk_track IS 'list of talk-track lines';
-COMMENT ON COLUMN coaching_lessons.practice_scenario IS 'the buyer line the rep replies to';
+COMMENT ON COLUMN practice_lessons.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN practice_lessons.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN practice_lessons.deleted_by IS 'the client user who deleted the row; empty when the system did it';
+COMMENT ON COLUMN practice_programs.client_user_id IS 'the rep being practised';
+COMMENT ON COLUMN practice_programs.created_by IS 'the client user who created the row; empty when the system did it';
+COMMENT ON COLUMN practice_programs.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN practice_program_lessons.evidence_meeting_id IS 'the call the lesson comes from';
+COMMENT ON COLUMN practice_program_lessons.talk_track IS 'list of talk-track lines';
+COMMENT ON COLUMN practice_program_lessons.practice_scenario IS 'the buyer line the rep replies to';
 COMMENT ON COLUMN practice_attempts.score IS '0-100';
-COMMENT ON COLUMN lesson_feedback.rep_id IS 'the rep who practised';
+COMMENT ON COLUMN lesson_feedback.client_user_id IS 'the rep who practised';
 COMMENT ON COLUMN lesson_feedback.manager_id IS 'who wrote the feedback';
+COMMENT ON COLUMN lesson_feedback.updated_by IS 'the client user who last changed the row; empty when the system did it';
 COMMENT ON COLUMN mock_meetings.source_meeting_id IS 'must be an analysed call';
 COMMENT ON COLUMN mock_meetings.score IS '0-100';
+COMMENT ON COLUMN mock_meetings.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN mock_meetings.deleted_by IS 'the client user who deleted the row; empty when the system did it';
 COMMENT ON COLUMN live_assist_sessions.meeting_id IS 'analysed call it was prepared from';
+COMMENT ON COLUMN automations.updated_by IS 'the client user who last changed the row; empty when the system did it';
+COMMENT ON COLUMN automations.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN automations.deleted_by IS 'the client user who deleted the row; empty when the system did it';
 COMMENT ON COLUMN chat_threads.lead_id IS 'set when asked from a lead';
+COMMENT ON COLUMN chat_threads.deleted_at IS 'soft delete: rows are hidden, not removed';
+COMMENT ON COLUMN chat_threads.deleted_by IS 'the client user who deleted the row; empty when the system did it';
 COMMENT ON COLUMN chat_messages.body IS 'what the user sees';
 COMMENT ON COLUMN chat_messages.raw_text IS 'assistant messages only: the model''s reply exactly as returned. Never set on user messages, so their text is not stored twice';
 COMMENT ON COLUMN chat_messages.citations IS 'knowledge source ids';
@@ -1018,33 +1197,31 @@ COMMENT ON COLUMN chat_messages.embeddings IS 'meaning vector of the message, fi
 COMMENT ON COLUMN chat_messages.embedding_model IS 'model that made the vector, so it can be redone';
 
 -- Indexes: every foreign key, plus the queries the app runs most
-CREATE INDEX idx_tenants_plan_id ON tenants(plan_id);
-CREATE INDEX idx_users_manager_id ON users(tenant_id, manager_id);
-CREATE INDEX idx_platform_limits_updated_by ON platform_limits(updated_by);
+CREATE INDEX idx_clients_plan_id ON clients(plan_id);
 CREATE INDEX idx_platform_audit_log_actor_id ON platform_audit_log(actor_id);
-CREATE INDEX idx_platform_audit_log_tenant_id ON platform_audit_log(tenant_id);
+CREATE INDEX idx_platform_audit_log_client_id ON platform_audit_log(client_id);
+CREATE INDEX idx_client_users_manager_id ON client_users(client_id, manager_id);
 CREATE INDEX idx_auth_identities_user_id ON auth_identities(user_id);
-CREATE INDEX idx_invitations_manager_id ON invitations(tenant_id, manager_id);
-CREATE INDEX idx_invitations_invited_by ON invitations(tenant_id, invited_by);
+CREATE INDEX idx_auth_identities_platform_owner_user_id ON auth_identities(platform_owner_user_id);
+CREATE INDEX idx_invitations_manager_id ON invitations(client_id, manager_id);
+CREATE INDEX idx_invitations_invited_by ON invitations(client_id, invited_by);
 CREATE INDEX idx_invitations_accepted_user_id ON invitations(accepted_user_id);
-CREATE INDEX idx_manager_assignments_rep_id ON manager_assignments(tenant_id, rep_id);
-CREATE INDEX idx_manager_assignments_manager_id ON manager_assignments(tenant_id, manager_id);
+CREATE INDEX idx_manager_assignments_client_user_id ON manager_assignments(client_user_id);
+CREATE INDEX idx_manager_assignments_manager_id ON manager_assignments(manager_id);
 CREATE INDEX idx_manager_assignments_assigned_by ON manager_assignments(assigned_by);
-CREATE INDEX idx_notifications_user_id ON notifications(tenant_id, user_id);
-CREATE INDEX idx_audit_log_tenant_id ON audit_log(tenant_id);
+CREATE INDEX idx_notifications_client_user_id ON notifications(client_user_id);
+CREATE INDEX idx_audit_log_client_id ON audit_log(client_id);
 CREATE INDEX idx_audit_log_actor_id ON audit_log(actor_id);
 CREATE INDEX idx_credit_transactions_user_id ON credit_transactions(user_id);
-CREATE INDEX idx_integrations_connected_by ON integrations(tenant_id, connected_by);
-CREATE INDEX idx_integration_sync_runs_integration_id ON integration_sync_runs(tenant_id, integration_id);
-CREATE INDEX idx_integration_events_integration_id ON integration_events(tenant_id, integration_id);
-CREATE INDEX idx_crm_activities_integration_id ON crm_activities(tenant_id, integration_id);
-CREATE INDEX idx_crm_activities_owner_user_id ON crm_activities(tenant_id, owner_user_id);
-CREATE INDEX idx_leads_owner_id ON leads(tenant_id, owner_id);
-CREATE INDEX idx_media_files_uploaded_by ON media_files(tenant_id, uploaded_by);
-CREATE INDEX idx_meetings_lead_id ON meetings(tenant_id, lead_id);
-CREATE INDEX idx_meetings_integration_id ON meetings(tenant_id, integration_id);
-CREATE INDEX idx_meetings_media_file_id ON meetings(tenant_id, media_file_id);
-CREATE INDEX idx_meetings_crm_activity_id ON meetings(tenant_id, crm_activity_id);
+CREATE INDEX idx_integrations_connected_by ON integrations(client_id, connected_by);
+CREATE INDEX idx_integration_sync_runs_integration_id ON integration_sync_runs(client_id, integration_id);
+CREATE INDEX idx_integration_events_integration_id ON integration_events(client_id, integration_id);
+CREATE INDEX idx_crm_activities_integration_id ON crm_activities(client_id, integration_id);
+CREATE INDEX idx_crm_activities_owner_user_id ON crm_activities(client_id, owner_user_id);
+CREATE INDEX idx_leads_client_user_id ON leads(client_user_id);
+CREATE INDEX idx_media_files_uploaded_by ON media_files(client_id, uploaded_by);
+CREATE INDEX idx_meetings_lead_id ON meetings(lead_id);
+CREATE INDEX idx_meetings_integration_id ON meetings(integration_id);
 CREATE INDEX idx_lead_timeline_events_lead_id ON lead_timeline_events(lead_id);
 CREATE INDEX idx_lead_timeline_events_meeting_id ON lead_timeline_events(meeting_id);
 CREATE INDEX idx_lead_timeline_events_author_id ON lead_timeline_events(author_id);
@@ -1053,73 +1230,75 @@ CREATE INDEX idx_analysis_runs_meeting_id ON analysis_runs(meeting_id);
 CREATE INDEX idx_meeting_insights_meeting_id ON meeting_insights(meeting_id);
 CREATE INDEX idx_cues_overrides_cue_id ON cues(overrides_cue_id);
 CREATE INDEX idx_cues_updated_by ON cues(updated_by);
+CREATE INDEX idx_cues_updated_by_owner_id ON cues(updated_by_owner_id);
 CREATE INDEX idx_meeting_cue_scores_cue_id ON meeting_cue_scores(cue_id);
 CREATE INDEX idx_meeting_cue_scores_evidence_segment_id ON meeting_cue_scores(evidence_segment_id);
 CREATE INDEX idx_meeting_objections_meeting_id ON meeting_objections(meeting_id);
 CREATE INDEX idx_meeting_objections_segment_id ON meeting_objections(segment_id);
-CREATE INDEX idx_knowledge_sources_created_by ON knowledge_sources(tenant_id, created_by);
-CREATE INDEX idx_company_documents_uploaded_by ON company_documents(tenant_id, uploaded_by);
+CREATE INDEX idx_knowledge_sources_created_by ON knowledge_sources(client_id, created_by);
+CREATE INDEX idx_company_documents_uploaded_by ON company_documents(client_id, uploaded_by);
 CREATE INDEX idx_company_documents_tagged_cue_id ON company_documents(tagged_cue_id);
-CREATE INDEX idx_knowledge_chunks_tenant_id ON knowledge_chunks(tenant_id);
+CREATE INDEX idx_knowledge_chunks_client_id ON knowledge_chunks(client_id);
 CREATE INDEX idx_knowledge_chunks_source_id ON knowledge_chunks(source_id);
 CREATE INDEX idx_knowledge_chunks_document_id ON knowledge_chunks(document_id);
 CREATE INDEX idx_knowledge_citations_source_id ON knowledge_citations(source_id);
 CREATE INDEX idx_knowledge_citations_user_id ON knowledge_citations(user_id);
 CREATE INDEX idx_knowledge_citations_meeting_id ON knowledge_citations(meeting_id);
-CREATE INDEX idx_practice_catalog_tenant_id ON practice_catalog(tenant_id);
-CREATE INDEX idx_practice_lessons_owner_id ON practice_lessons(tenant_id, owner_id);
-CREATE INDEX idx_practice_lessons_created_by ON practice_lessons(tenant_id, created_by);
-CREATE INDEX idx_practice_lessons_meeting_id ON practice_lessons(tenant_id, meeting_id);
-CREATE INDEX idx_practice_lessons_lead_id ON practice_lessons(tenant_id, lead_id);
-CREATE INDEX idx_coaching_programs_lead_id ON coaching_programs(tenant_id, lead_id);
-CREATE INDEX idx_coaching_programs_rep_id ON coaching_programs(tenant_id, rep_id);
-CREATE INDEX idx_coaching_lessons_evidence_meeting_id ON coaching_lessons(evidence_meeting_id);
-CREATE INDEX idx_practice_attempts_user_id ON practice_attempts(tenant_id, user_id);
+CREATE INDEX idx_practice_catalog_client_id ON practice_catalog(client_id);
+CREATE INDEX idx_practice_lessons_client_user_id ON practice_lessons(client_user_id);
+CREATE INDEX idx_practice_lessons_created_by ON practice_lessons(created_by);
+CREATE INDEX idx_practice_lessons_meeting_id ON practice_lessons(meeting_id);
+CREATE INDEX idx_practice_lessons_lead_id ON practice_lessons(lead_id);
+CREATE INDEX idx_practice_programs_client_user_id ON practice_programs(client_user_id);
+CREATE INDEX idx_practice_program_lessons_evidence_meeting_id ON practice_program_lessons(evidence_meeting_id);
+CREATE INDEX idx_practice_attempts_client_user_id ON practice_attempts(client_user_id);
 CREATE INDEX idx_practice_attempts_lesson_id ON practice_attempts(lesson_id);
-CREATE INDEX idx_practice_attempts_coaching_lesson_id ON practice_attempts(coaching_lesson_id);
-CREATE INDEX idx_lesson_feedback_rep_id ON lesson_feedback(tenant_id, rep_id);
-CREATE INDEX idx_lesson_feedback_manager_id ON lesson_feedback(tenant_id, manager_id);
+CREATE INDEX idx_practice_attempts_program_lesson_id ON practice_attempts(program_lesson_id);
+CREATE INDEX idx_lesson_feedback_client_user_id ON lesson_feedback(client_user_id);
+CREATE INDEX idx_lesson_feedback_manager_id ON lesson_feedback(manager_id);
 CREATE INDEX idx_lesson_feedback_lesson_id ON lesson_feedback(lesson_id);
-CREATE INDEX idx_lesson_feedback_coaching_lesson_id ON lesson_feedback(coaching_lesson_id);
-CREATE INDEX idx_mock_meetings_rep_id ON mock_meetings(tenant_id, rep_id);
-CREATE INDEX idx_mock_meetings_source_meeting_id ON mock_meetings(tenant_id, source_meeting_id);
+CREATE INDEX idx_lesson_feedback_program_lesson_id ON lesson_feedback(program_lesson_id);
+CREATE INDEX idx_mock_meetings_client_user_id ON mock_meetings(client_user_id);
+CREATE INDEX idx_mock_meetings_source_meeting_id ON mock_meetings(source_meeting_id);
 CREATE INDEX idx_mock_meeting_points_mock_meeting_id ON mock_meeting_points(mock_meeting_id);
-CREATE INDEX idx_live_assist_sessions_user_id ON live_assist_sessions(tenant_id, user_id);
-CREATE INDEX idx_live_assist_sessions_meeting_id ON live_assist_sessions(tenant_id, meeting_id);
-CREATE INDEX idx_automations_created_by ON automations(tenant_id, created_by);
+CREATE INDEX idx_live_assist_sessions_client_user_id ON live_assist_sessions(client_user_id);
+CREATE INDEX idx_live_assist_sessions_meeting_id ON live_assist_sessions(meeting_id);
+CREATE INDEX idx_automations_created_by ON automations(client_id, created_by);
 CREATE INDEX idx_automation_runs_automation_id ON automation_runs(automation_id);
 CREATE INDEX idx_automation_runs_meeting_id ON automation_runs(meeting_id);
 CREATE INDEX idx_automation_runs_lead_id ON automation_runs(lead_id);
-CREATE INDEX idx_chat_threads_user_id ON chat_threads(tenant_id, user_id);
-CREATE INDEX idx_chat_threads_lead_id ON chat_threads(tenant_id, lead_id);
+CREATE INDEX idx_chat_threads_client_user_id ON chat_threads(client_user_id);
+CREATE INDEX idx_chat_threads_lead_id ON chat_threads(lead_id);
 CREATE INDEX idx_chat_messages_thread_id ON chat_messages(thread_id);
-CREATE UNIQUE INDEX uq_invitations_pending ON invitations(tenant_id, email) WHERE status = 'pending';
-CREATE UNIQUE INDEX uq_manager_assignments_current ON manager_assignments(rep_id) WHERE ended_at IS NULL;
+CREATE UNIQUE INDEX uq_invitations_pending ON invitations(client_id, email) WHERE status = 'pending';
+CREATE UNIQUE INDEX uq_manager_assignments_current ON manager_assignments(client_user_id) WHERE ended_at IS NULL;
 CREATE INDEX idx_integrations_due ON integrations(next_sync_at) WHERE status = 'connected' AND sync_interval <> 'manual';
 CREATE INDEX idx_integration_sync_runs_recent ON integration_sync_runs(integration_id, started_at DESC);
-CREATE INDEX idx_crm_activities_phone ON crm_activities(tenant_id, phone_number);
-CREATE INDEX idx_crm_activities_what ON crm_activities(tenant_id, what_id);
-CREATE INDEX idx_leads_tenant_stage ON leads(tenant_id, stage) WHERE deleted_at IS NULL;
+CREATE INDEX idx_crm_activities_phone ON crm_activities(client_id, phone_number);
+CREATE INDEX idx_crm_activities_what ON crm_activities(client_id, what_id);
+CREATE UNIQUE INDEX uq_leads_crm_id ON leads(crm_id) WHERE crm_id IS NOT NULL;
+CREATE INDEX idx_leads_owner_stage ON leads(client_user_id, stage) WHERE deleted_at IS NULL;
 CREATE INDEX idx_media_files_retention ON media_files(retention_until) WHERE deleted_at IS NULL;
-CREATE INDEX idx_meetings_tenant_rep ON meetings(tenant_id, rep_id, uploaded_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX idx_meetings_user_time ON meetings(client_user_id, uploaded_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX idx_meetings_lead_time ON meetings(lead_id, meeting_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX idx_meetings_pending ON meetings(tenant_id, processing_status) WHERE processing_status NOT IN ('analysed','failed');
+CREATE INDEX idx_meetings_pending ON meetings(processing_status) WHERE processing_status NOT IN ('analysed','failed');
 CREATE INDEX idx_meetings_tags ON meetings USING gin(tags);
 CREATE INDEX idx_meetings_summary_embeddings ON meetings USING hnsw (summary_embeddings halfvec_cosine_ops) WHERE summary_embeddings IS NOT NULL;
 CREATE INDEX idx_lead_timeline_events_feed ON lead_timeline_events(lead_id, occurred_at DESC);
-CREATE UNIQUE INDEX uq_cues_default_code ON cues(code) WHERE tenant_id IS NULL;
-CREATE UNIQUE INDEX uq_cues_one_override ON cues(tenant_id, overrides_cue_id) WHERE overrides_cue_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_cues_default_code ON cues(code) WHERE client_id IS NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX uq_cues_one_override ON cues(client_id, overrides_cue_id) WHERE overrides_cue_id IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX idx_transcript_segments_tsv ON transcript_segments USING gin(tsv);
 CREATE INDEX idx_transcript_segments_time ON transcript_segments(meeting_id, start_ms);
 CREATE INDEX idx_transcript_segments_tags ON transcript_segments USING gin(tags);
 CREATE INDEX idx_transcript_segments_embeddings ON transcript_segments USING hnsw (embeddings halfvec_cosine_ops) WHERE embeddings IS NOT NULL;
 CREATE INDEX idx_knowledge_sources_tags ON knowledge_sources USING gin(tags);
-CREATE UNIQUE INDEX uq_knowledge_sources_hash ON knowledge_sources(tenant_id, content_hash) WHERE content_hash IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX uq_knowledge_sources_hash ON knowledge_sources(client_id, content_hash) WHERE content_hash IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX idx_company_documents_tags ON company_documents USING gin(tags);
-CREATE UNIQUE INDEX uq_company_documents_hash ON company_documents(tenant_id, checksum_sha256) WHERE checksum_sha256 IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX uq_company_documents_hash ON company_documents(client_id, checksum_sha256) WHERE checksum_sha256 IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX idx_company_documents_embeddings ON company_documents USING hnsw (embeddings halfvec_cosine_ops) WHERE embeddings IS NOT NULL;
 CREATE INDEX idx_knowledge_chunks_tsv ON knowledge_chunks USING gin(tsv);
 CREATE INDEX idx_knowledge_chunks_embeddings ON knowledge_chunks USING hnsw (embeddings halfvec_cosine_ops) WHERE embeddings IS NOT NULL;
+CREATE UNIQUE INDEX uq_automations_name ON automations(client_id, name) WHERE deleted_at IS NULL;
 CREATE INDEX idx_chat_messages_thread_time ON chat_messages(thread_id, created_at);
 CREATE INDEX idx_chat_messages_tags ON chat_messages USING gin(tags);
 CREATE INDEX idx_chat_messages_embeddings ON chat_messages USING hnsw (embeddings halfvec_cosine_ops) WHERE embeddings IS NOT NULL;
@@ -1127,7 +1306,7 @@ CREATE INDEX idx_chat_messages_embeddings ON chat_messages USING hnsw (embedding
 -- ================================================================
 -- Who can see whose records (the manager - sales rep rule, enforced in the database)
 --   client_admin : everyone in the company
---   manager      : themselves and the reps whose users.manager_id is them
+--   manager      : themselves and the reps whose client_users.manager_id is them
 --   sales_rep    : themselves
 --   super_admin  : no business data at all (platform tables only)
 -- An unassigned rep (manager_id NULL) is visible to the admin and to the rep, not to any manager.
@@ -1139,17 +1318,28 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     WHEN 'client_admin' THEN true
     WHEN 'sales_rep'    THEN p_owner = app_user_id()
     WHEN 'manager'      THEN p_owner = app_user_id() OR EXISTS (
-         SELECT 1 FROM users u
-         WHERE u.id = p_owner AND u.manager_id = app_user_id() AND u.tenant_id = app_tenant_id() AND u.deleted_at IS NULL)
+         SELECT 1 FROM client_users u
+         WHERE u.client_user_id = p_owner AND u.manager_id = app_user_id() AND u.client_id = app_client_id() AND u.deleted_at IS NULL)
     ELSE false
   END
 $$;
 
+-- True when the given client user works for the caller's company. Leads have no client_id of their own, so their policies use this.
+CREATE FUNCTION app_in_my_client(p_user uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  SELECT EXISTS (SELECT 1 FROM client_users u WHERE u.client_user_id = p_user AND u.client_id = app_client_id())
+$$;
+
 -- ================================================================
 -- Row level security. The API connects as sellmore_app and sets, per transaction:
---   SET LOCAL app.user_id = '<uuid>'; SET LOCAL app.tenant_id = '<uuid>'; SET LOCAL app.role = '<role>';
+--   SET LOCAL app.user_id = '<uuid>'; SET LOCAL app.client_id = '<uuid>'; SET LOCAL app.role = '<role>';
 -- Every table below denies by default. A table with no policy for a command refuses that command.
 -- ================================================================
+ALTER TABLE platform_owner_users ENABLE ROW LEVEL SECURITY;
+CREATE POLICY platform_owner_users_select ON platform_owner_users FOR SELECT USING (app_role() = 'super_admin');
+CREATE POLICY platform_owner_users_insert ON platform_owner_users FOR INSERT WITH CHECK (app_role() = 'super_admin');
+CREATE POLICY platform_owner_users_update ON platform_owner_users FOR UPDATE USING (app_role() = 'super_admin') WITH CHECK (app_role() = 'super_admin');
+
 ALTER TABLE plans ENABLE ROW LEVEL SECURITY;
 CREATE POLICY plans_select ON plans FOR SELECT USING (app_role() IS NOT NULL);
 CREATE POLICY plans_write ON plans FOR ALL USING (app_role() = 'super_admin') WITH CHECK (app_role() = 'super_admin');
@@ -1158,237 +1348,288 @@ ALTER TABLE plan_features ENABLE ROW LEVEL SECURITY;
 CREATE POLICY plan_features_select ON plan_features FOR SELECT USING (app_role() IS NOT NULL);
 CREATE POLICY plan_features_write ON plan_features FOR ALL USING (app_role() = 'super_admin') WITH CHECK (app_role() = 'super_admin');
 
-ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
-CREATE POLICY tenants_select ON tenants FOR SELECT USING (app_role() = 'super_admin' OR id = app_tenant_id());
-CREATE POLICY tenants_insert ON tenants FOR INSERT WITH CHECK (app_role() = 'super_admin');
-CREATE POLICY tenants_update ON tenants FOR UPDATE USING (app_role() = 'super_admin' OR (id = app_tenant_id() AND app_role() = 'client_admin')) WITH CHECK (app_role() = 'super_admin' OR (id = app_tenant_id() AND app_role() = 'client_admin'));
-CREATE POLICY tenants_delete ON tenants FOR DELETE USING (app_role() = 'super_admin');
-
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-CREATE POLICY users_select ON users FOR SELECT USING (app_role() = 'super_admin' OR tenant_id = app_tenant_id());
-CREATE POLICY users_insert ON users FOR INSERT WITH CHECK (app_role() = 'super_admin' OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin'));
-CREATE POLICY users_update ON users FOR UPDATE USING (app_role() = 'super_admin' OR (tenant_id = app_tenant_id() AND (app_role() = 'client_admin' OR id = app_user_id()))) WITH CHECK (app_role() = 'super_admin' OR (tenant_id = app_tenant_id() AND (app_role() = 'client_admin' OR id = app_user_id())));
-CREATE POLICY users_delete ON users FOR DELETE USING (app_role() = 'super_admin');
-
 ALTER TABLE platform_limits ENABLE ROW LEVEL SECURITY;
 CREATE POLICY platform_limits_select ON platform_limits FOR SELECT USING (app_role() IS NOT NULL);
 CREATE POLICY platform_limits_write ON platform_limits FOR ALL USING (app_role() = 'super_admin') WITH CHECK (app_role() = 'super_admin');
+
+ALTER TABLE clients ENABLE ROW LEVEL SECURITY;
+CREATE POLICY clients_select ON clients FOR SELECT USING (app_role() = 'super_admin' OR client_id = app_client_id());
+CREATE POLICY clients_insert ON clients FOR INSERT WITH CHECK (app_role() = 'super_admin');
+CREATE POLICY clients_update ON clients FOR UPDATE USING (app_role() = 'super_admin' OR (client_id = app_client_id() AND app_role() = 'client_admin')) WITH CHECK (app_role() = 'super_admin' OR (client_id = app_client_id() AND app_role() = 'client_admin'));
+CREATE POLICY clients_delete ON clients FOR DELETE USING (app_role() = 'super_admin');
 
 ALTER TABLE platform_audit_log ENABLE ROW LEVEL SECURITY;
 CREATE POLICY platform_audit_log_select ON platform_audit_log FOR SELECT USING (app_role() = 'super_admin');
 CREATE POLICY platform_audit_log_insert ON platform_audit_log FOR INSERT WITH CHECK (app_role() = 'super_admin');
 
+ALTER TABLE client_users ENABLE ROW LEVEL SECURITY;
+CREATE POLICY client_users_select ON client_users FOR SELECT USING (app_role() = 'super_admin' OR client_id = app_client_id());
+CREATE POLICY client_users_insert ON client_users FOR INSERT WITH CHECK (app_role() = 'super_admin' OR (client_id = app_client_id() AND app_role() = 'client_admin'));
+CREATE POLICY client_users_update ON client_users FOR UPDATE USING (app_role() = 'super_admin' OR (client_id = app_client_id() AND (app_role() = 'client_admin' OR client_user_id = app_user_id()))) WITH CHECK (app_role() = 'super_admin' OR (client_id = app_client_id() AND (app_role() = 'client_admin' OR client_user_id = app_user_id())));
+CREATE POLICY client_users_delete ON client_users FOR DELETE USING (app_role() = 'super_admin');
+
 ALTER TABLE auth_identities ENABLE ROW LEVEL SECURITY;
 -- auth_identities: no policy, so the API role cannot touch it. Only the auth / worker roles can.
 
 ALTER TABLE invitations ENABLE ROW LEVEL SECURITY;
-CREATE POLICY invitations_select ON invitations FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
-CREATE POLICY invitations_insert ON invitations FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
-CREATE POLICY invitations_update ON invitations FOR UPDATE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager')) WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
-CREATE POLICY invitations_delete ON invitations FOR DELETE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY invitations_select ON invitations FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY invitations_insert ON invitations FOR INSERT WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY invitations_update ON invitations FOR UPDATE USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager')) WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY invitations_delete ON invitations FOR DELETE USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
 
 ALTER TABLE manager_assignments ENABLE ROW LEVEL SECURITY;
-CREATE POLICY manager_assignments_select ON manager_assignments FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY manager_assignments_select ON manager_assignments FOR SELECT USING (app_in_my_client(client_user_id) AND app_role() IN ('client_admin', 'manager'));
 
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
-CREATE POLICY notifications_select ON notifications FOR SELECT USING (tenant_id = app_tenant_id() AND user_id = app_user_id());
-CREATE POLICY notifications_insert ON notifications FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND user_id = app_user_id());
-CREATE POLICY notifications_update ON notifications FOR UPDATE USING (tenant_id = app_tenant_id() AND user_id = app_user_id()) WITH CHECK (tenant_id = app_tenant_id() AND user_id = app_user_id());
-CREATE POLICY notifications_delete ON notifications FOR DELETE USING (tenant_id = app_tenant_id() AND user_id = app_user_id());
+CREATE POLICY notifications_select ON notifications FOR SELECT USING (app_in_my_client(client_user_id) AND client_user_id = app_user_id());
+CREATE POLICY notifications_insert ON notifications FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND client_user_id = app_user_id());
+CREATE POLICY notifications_update ON notifications FOR UPDATE USING (app_in_my_client(client_user_id) AND client_user_id = app_user_id()) WITH CHECK (app_in_my_client(client_user_id) AND client_user_id = app_user_id());
+CREATE POLICY notifications_delete ON notifications FOR DELETE USING (app_in_my_client(client_user_id) AND client_user_id = app_user_id());
 
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
-CREATE POLICY audit_log_select ON audit_log FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
-CREATE POLICY audit_log_insert ON audit_log FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
+CREATE POLICY audit_log_select ON audit_log FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin'));
+CREATE POLICY audit_log_insert ON audit_log FOR INSERT WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
 
 ALTER TABLE credit_transactions ENABLE ROW LEVEL SECURITY;
-CREATE POLICY credit_transactions_select ON credit_transactions FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
+CREATE POLICY credit_transactions_select ON credit_transactions FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin'));
 
 ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
-CREATE POLICY invoices_select ON invoices FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
+CREATE POLICY invoices_select ON invoices FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin'));
 
 ALTER TABLE integrations ENABLE ROW LEVEL SECURITY;
-CREATE POLICY integrations_select ON integrations FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
-CREATE POLICY integrations_insert ON integrations FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
-CREATE POLICY integrations_update ON integrations FOR UPDATE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin')) WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
-CREATE POLICY integrations_delete ON integrations FOR DELETE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
+CREATE POLICY integrations_select ON integrations FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
+CREATE POLICY integrations_insert ON integrations FOR INSERT WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin'));
+CREATE POLICY integrations_update ON integrations FOR UPDATE USING (client_id = app_client_id() AND app_role() IN ('client_admin')) WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin'));
+CREATE POLICY integrations_delete ON integrations FOR DELETE USING (client_id = app_client_id() AND app_role() IN ('client_admin'));
 
 ALTER TABLE integration_credentials ENABLE ROW LEVEL SECURITY;
 -- integration_credentials: no policy, so the API role cannot touch it. Only the auth / worker roles can.
 
 ALTER TABLE integration_sync_runs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY integration_sync_runs_select ON integration_sync_runs FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY integration_sync_runs_select ON integration_sync_runs FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
 
 ALTER TABLE integration_events ENABLE ROW LEVEL SECURITY;
 -- integration_events: no policy, so the API role cannot touch it. Only the auth / worker roles can.
 
 ALTER TABLE crm_stage_mappings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY crm_stage_mappings_select ON crm_stage_mappings FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
-CREATE POLICY crm_stage_mappings_insert ON crm_stage_mappings FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
-CREATE POLICY crm_stage_mappings_update ON crm_stage_mappings FOR UPDATE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin')) WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
-CREATE POLICY crm_stage_mappings_delete ON crm_stage_mappings FOR DELETE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
+CREATE POLICY crm_stage_mappings_select ON crm_stage_mappings FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
+CREATE POLICY crm_stage_mappings_insert ON crm_stage_mappings FOR INSERT WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin'));
+CREATE POLICY crm_stage_mappings_update ON crm_stage_mappings FOR UPDATE USING (client_id = app_client_id() AND app_role() IN ('client_admin')) WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin'));
+CREATE POLICY crm_stage_mappings_delete ON crm_stage_mappings FOR DELETE USING (client_id = app_client_id() AND app_role() IN ('client_admin'));
 
 ALTER TABLE crm_activities ENABLE ROW LEVEL SECURITY;
-CREATE POLICY crm_activities_select ON crm_activities FOR SELECT USING (tenant_id = app_tenant_id() AND app_can_access_owner(owner_user_id));
+CREATE POLICY crm_activities_select ON crm_activities FOR SELECT USING (client_id = app_client_id() AND app_can_access_owner(owner_user_id));
 
 ALTER TABLE leads ENABLE ROW LEVEL SECURITY;
-CREATE POLICY leads_select ON leads FOR SELECT USING (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id));
-CREATE POLICY leads_insert ON leads FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id));
-CREATE POLICY leads_update ON leads FOR UPDATE USING (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id)) WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id));
-CREATE POLICY leads_delete ON leads FOR DELETE USING (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id));
+CREATE POLICY leads_select ON leads FOR SELECT USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY leads_insert ON leads FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY leads_update ON leads FOR UPDATE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id)) WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY leads_delete ON leads FOR DELETE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
 
 ALTER TABLE lead_stakeholders ENABLE ROW LEVEL SECURITY;
-CREATE POLICY lead_stakeholders_access ON lead_stakeholders FOR ALL USING (EXISTS (SELECT 1 FROM leads p WHERE p.id = lead_stakeholders.lead_id)) WITH CHECK (EXISTS (SELECT 1 FROM leads p WHERE p.id = lead_stakeholders.lead_id));
+CREATE POLICY lead_stakeholders_access ON lead_stakeholders FOR ALL USING (EXISTS (SELECT 1 FROM leads p WHERE p.lead_id = lead_stakeholders.lead_id)) WITH CHECK (EXISTS (SELECT 1 FROM leads p WHERE p.lead_id = lead_stakeholders.lead_id));
 
 ALTER TABLE media_files ENABLE ROW LEVEL SECURITY;
-CREATE POLICY media_files_select ON media_files FOR SELECT USING (tenant_id = app_tenant_id() AND (app_role() = 'client_admin' OR EXISTS (SELECT 1 FROM meetings m WHERE m.media_file_id = media_files.id)));
-CREATE POLICY media_files_insert ON media_files FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND (app_role() = 'client_admin' OR uploaded_by = app_user_id()));
-CREATE POLICY media_files_update ON media_files FOR UPDATE USING (tenant_id = app_tenant_id() AND (app_role() = 'client_admin' OR uploaded_by = app_user_id()));
-CREATE POLICY media_files_delete ON media_files FOR DELETE USING (tenant_id = app_tenant_id() AND app_role() = 'client_admin');
+CREATE POLICY media_files_select ON media_files FOR SELECT USING (client_id = app_client_id() AND (app_role() = 'client_admin' OR EXISTS (SELECT 1 FROM meetings m WHERE m.media_file_id = media_files.media_file_id)));
+CREATE POLICY media_files_insert ON media_files FOR INSERT WITH CHECK (client_id = app_client_id() AND (app_role() = 'client_admin' OR uploaded_by = app_user_id()));
+CREATE POLICY media_files_update ON media_files FOR UPDATE USING (client_id = app_client_id() AND (app_role() = 'client_admin' OR uploaded_by = app_user_id()));
+CREATE POLICY media_files_delete ON media_files FOR DELETE USING (client_id = app_client_id() AND app_role() = 'client_admin');
 
 ALTER TABLE meetings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY meetings_select ON meetings FOR SELECT USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY meetings_insert ON meetings FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY meetings_update ON meetings FOR UPDATE USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id)) WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY meetings_delete ON meetings FOR DELETE USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
+CREATE POLICY meetings_select ON meetings FOR SELECT USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY meetings_insert ON meetings FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY meetings_update ON meetings FOR UPDATE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id)) WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY meetings_delete ON meetings FOR DELETE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
 
 ALTER TABLE lead_timeline_events ENABLE ROW LEVEL SECURITY;
-CREATE POLICY lead_timeline_events_access ON lead_timeline_events FOR ALL USING (EXISTS (SELECT 1 FROM leads p WHERE p.id = lead_timeline_events.lead_id)) WITH CHECK (EXISTS (SELECT 1 FROM leads p WHERE p.id = lead_timeline_events.lead_id));
+CREATE POLICY lead_timeline_events_access ON lead_timeline_events FOR ALL USING (EXISTS (SELECT 1 FROM leads p WHERE p.lead_id = lead_timeline_events.lead_id)) WITH CHECK (EXISTS (SELECT 1 FROM leads p WHERE p.lead_id = lead_timeline_events.lead_id));
 
 ALTER TABLE lead_risks ENABLE ROW LEVEL SECURITY;
-CREATE POLICY lead_risks_access ON lead_risks FOR ALL USING (EXISTS (SELECT 1 FROM leads p WHERE p.id = lead_risks.lead_id)) WITH CHECK (EXISTS (SELECT 1 FROM leads p WHERE p.id = lead_risks.lead_id));
+CREATE POLICY lead_risks_access ON lead_risks FOR ALL USING (EXISTS (SELECT 1 FROM leads p WHERE p.lead_id = lead_risks.lead_id)) WITH CHECK (EXISTS (SELECT 1 FROM leads p WHERE p.lead_id = lead_risks.lead_id));
 
 ALTER TABLE analysis_runs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY analysis_runs_access ON analysis_runs FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.id = analysis_runs.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.id = analysis_runs.meeting_id));
+CREATE POLICY analysis_runs_access ON analysis_runs FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = analysis_runs.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = analysis_runs.meeting_id));
 
 ALTER TABLE meeting_insights ENABLE ROW LEVEL SECURITY;
-CREATE POLICY meeting_insights_access ON meeting_insights FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_insights.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_insights.meeting_id));
+CREATE POLICY meeting_insights_access ON meeting_insights FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = meeting_insights.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = meeting_insights.meeting_id));
 
 ALTER TABLE cues ENABLE ROW LEVEL SECURITY;
-CREATE POLICY cues_select ON cues FOR SELECT USING (tenant_id IS NULL OR tenant_id = app_tenant_id());
-CREATE POLICY cues_insert ON cues FOR INSERT WITH CHECK ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin'));
-CREATE POLICY cues_update ON cues FOR UPDATE USING ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin')) WITH CHECK ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin'));
-CREATE POLICY cues_delete ON cues FOR DELETE USING ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin'));
+CREATE POLICY cues_select ON cues FOR SELECT USING (client_id IS NULL OR client_id = app_client_id());
+CREATE POLICY cues_insert ON cues FOR INSERT WITH CHECK ((client_id IS NULL AND app_role() = 'super_admin') OR (client_id = app_client_id() AND app_role() = 'client_admin'));
+CREATE POLICY cues_update ON cues FOR UPDATE USING ((client_id IS NULL AND app_role() = 'super_admin') OR (client_id = app_client_id() AND app_role() = 'client_admin')) WITH CHECK ((client_id IS NULL AND app_role() = 'super_admin') OR (client_id = app_client_id() AND app_role() = 'client_admin'));
+CREATE POLICY cues_delete ON cues FOR DELETE USING ((client_id IS NULL AND app_role() = 'super_admin') OR (client_id = app_client_id() AND app_role() = 'client_admin'));
 
 ALTER TABLE transcript_segments ENABLE ROW LEVEL SECURITY;
-CREATE POLICY transcript_segments_access ON transcript_segments FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.id = transcript_segments.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.id = transcript_segments.meeting_id));
+CREATE POLICY transcript_segments_access ON transcript_segments FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = transcript_segments.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = transcript_segments.meeting_id));
 
 ALTER TABLE meeting_cue_scores ENABLE ROW LEVEL SECURITY;
-CREATE POLICY meeting_cue_scores_access ON meeting_cue_scores FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_cue_scores.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_cue_scores.meeting_id));
+CREATE POLICY meeting_cue_scores_access ON meeting_cue_scores FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = meeting_cue_scores.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = meeting_cue_scores.meeting_id));
 
 ALTER TABLE meeting_objections ENABLE ROW LEVEL SECURITY;
-CREATE POLICY meeting_objections_access ON meeting_objections FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_objections.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.id = meeting_objections.meeting_id));
+CREATE POLICY meeting_objections_access ON meeting_objections FOR ALL USING (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = meeting_objections.meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM meetings p WHERE p.meeting_id = meeting_objections.meeting_id));
 
 ALTER TABLE transcript_segment_cues ENABLE ROW LEVEL SECURITY;
-CREATE POLICY transcript_segment_cues_access ON transcript_segment_cues FOR ALL USING (EXISTS (SELECT 1 FROM transcript_segments p WHERE p.id = transcript_segment_cues.segment_id)) WITH CHECK (EXISTS (SELECT 1 FROM transcript_segments p WHERE p.id = transcript_segment_cues.segment_id));
+CREATE POLICY transcript_segment_cues_access ON transcript_segment_cues FOR ALL USING (EXISTS (SELECT 1 FROM transcript_segments p WHERE p.transcript_segment_id = transcript_segment_cues.segment_id)) WITH CHECK (EXISTS (SELECT 1 FROM transcript_segments p WHERE p.transcript_segment_id = transcript_segment_cues.segment_id));
 
 ALTER TABLE knowledge_sources ENABLE ROW LEVEL SECURITY;
-CREATE POLICY knowledge_sources_select ON knowledge_sources FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
-CREATE POLICY knowledge_sources_insert ON knowledge_sources FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
-CREATE POLICY knowledge_sources_update ON knowledge_sources FOR UPDATE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager')) WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
-CREATE POLICY knowledge_sources_delete ON knowledge_sources FOR DELETE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY knowledge_sources_select ON knowledge_sources FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
+CREATE POLICY knowledge_sources_insert ON knowledge_sources FOR INSERT WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY knowledge_sources_update ON knowledge_sources FOR UPDATE USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager')) WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY knowledge_sources_delete ON knowledge_sources FOR DELETE USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
 
 ALTER TABLE company_documents ENABLE ROW LEVEL SECURITY;
-CREATE POLICY company_documents_select ON company_documents FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
-CREATE POLICY company_documents_insert ON company_documents FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
-CREATE POLICY company_documents_update ON company_documents FOR UPDATE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin')) WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
-CREATE POLICY company_documents_delete ON company_documents FOR DELETE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin'));
+CREATE POLICY company_documents_select ON company_documents FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
+CREATE POLICY company_documents_insert ON company_documents FOR INSERT WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin'));
+CREATE POLICY company_documents_update ON company_documents FOR UPDATE USING (client_id = app_client_id() AND app_role() IN ('client_admin')) WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin'));
+CREATE POLICY company_documents_delete ON company_documents FOR DELETE USING (client_id = app_client_id() AND app_role() IN ('client_admin'));
 
 ALTER TABLE knowledge_chunks ENABLE ROW LEVEL SECURITY;
-CREATE POLICY knowledge_chunks_select ON knowledge_chunks FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
+CREATE POLICY knowledge_chunks_select ON knowledge_chunks FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
 
 ALTER TABLE knowledge_citations ENABLE ROW LEVEL SECURITY;
-CREATE POLICY knowledge_citations_access ON knowledge_citations FOR ALL USING (EXISTS (SELECT 1 FROM knowledge_sources p WHERE p.id = knowledge_citations.source_id)) WITH CHECK (EXISTS (SELECT 1 FROM knowledge_sources p WHERE p.id = knowledge_citations.source_id));
+CREATE POLICY knowledge_citations_access ON knowledge_citations FOR ALL USING (EXISTS (SELECT 1 FROM knowledge_sources p WHERE p.knowledge_source_id = knowledge_citations.source_id)) WITH CHECK (EXISTS (SELECT 1 FROM knowledge_sources p WHERE p.knowledge_source_id = knowledge_citations.source_id));
 
 ALTER TABLE practice_catalog ENABLE ROW LEVEL SECURITY;
-CREATE POLICY practice_catalog_select ON practice_catalog FOR SELECT USING (tenant_id IS NULL OR tenant_id = app_tenant_id());
-CREATE POLICY practice_catalog_write ON practice_catalog FOR ALL USING ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin')) WITH CHECK ((tenant_id IS NULL AND app_role() = 'super_admin') OR (tenant_id = app_tenant_id() AND app_role() = 'client_admin'));
+CREATE POLICY practice_catalog_select ON practice_catalog FOR SELECT USING (client_id IS NULL OR client_id = app_client_id());
+CREATE POLICY practice_catalog_write ON practice_catalog FOR ALL USING ((client_id IS NULL AND app_role() = 'super_admin') OR (client_id = app_client_id() AND app_role() = 'client_admin')) WITH CHECK ((client_id IS NULL AND app_role() = 'super_admin') OR (client_id = app_client_id() AND app_role() = 'client_admin'));
 
 ALTER TABLE practice_lessons ENABLE ROW LEVEL SECURITY;
-CREATE POLICY practice_lessons_select ON practice_lessons FOR SELECT USING (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id));
-CREATE POLICY practice_lessons_insert ON practice_lessons FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id));
-CREATE POLICY practice_lessons_update ON practice_lessons FOR UPDATE USING (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id)) WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id));
-CREATE POLICY practice_lessons_delete ON practice_lessons FOR DELETE USING (tenant_id = app_tenant_id() AND app_can_access_owner(owner_id));
+CREATE POLICY practice_lessons_select ON practice_lessons FOR SELECT USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY practice_lessons_insert ON practice_lessons FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY practice_lessons_update ON practice_lessons FOR UPDATE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id)) WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY practice_lessons_delete ON practice_lessons FOR DELETE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
 
 ALTER TABLE practice_lesson_cues ENABLE ROW LEVEL SECURITY;
-CREATE POLICY practice_lesson_cues_access ON practice_lesson_cues FOR ALL USING (EXISTS (SELECT 1 FROM practice_lessons p WHERE p.id = practice_lesson_cues.lesson_id)) WITH CHECK (EXISTS (SELECT 1 FROM practice_lessons p WHERE p.id = practice_lesson_cues.lesson_id));
+CREATE POLICY practice_lesson_cues_access ON practice_lesson_cues FOR ALL USING (EXISTS (SELECT 1 FROM practice_lessons p WHERE p.practice_lesson_id = practice_lesson_cues.lesson_id)) WITH CHECK (EXISTS (SELECT 1 FROM practice_lessons p WHERE p.practice_lesson_id = practice_lesson_cues.lesson_id));
 
-ALTER TABLE coaching_programs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY coaching_programs_select ON coaching_programs FOR SELECT USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY coaching_programs_insert ON coaching_programs FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY coaching_programs_update ON coaching_programs FOR UPDATE USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id)) WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY coaching_programs_delete ON coaching_programs FOR DELETE USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
+ALTER TABLE practice_programs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY practice_programs_select ON practice_programs FOR SELECT USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY practice_programs_insert ON practice_programs FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY practice_programs_update ON practice_programs FOR UPDATE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id)) WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY practice_programs_delete ON practice_programs FOR DELETE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
 
-ALTER TABLE coaching_program_meetings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY coaching_program_meetings_access ON coaching_program_meetings FOR ALL USING (EXISTS (SELECT 1 FROM coaching_programs p WHERE p.id = coaching_program_meetings.program_id)) WITH CHECK (EXISTS (SELECT 1 FROM coaching_programs p WHERE p.id = coaching_program_meetings.program_id));
+ALTER TABLE practice_program_meetings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY practice_program_meetings_access ON practice_program_meetings FOR ALL USING (EXISTS (SELECT 1 FROM practice_programs p WHERE p.practice_program_id = practice_program_meetings.program_id)) WITH CHECK (EXISTS (SELECT 1 FROM practice_programs p WHERE p.practice_program_id = practice_program_meetings.program_id));
 
-ALTER TABLE coaching_lessons ENABLE ROW LEVEL SECURITY;
-CREATE POLICY coaching_lessons_access ON coaching_lessons FOR ALL USING (EXISTS (SELECT 1 FROM coaching_programs p WHERE p.id = coaching_lessons.program_id)) WITH CHECK (EXISTS (SELECT 1 FROM coaching_programs p WHERE p.id = coaching_lessons.program_id));
+ALTER TABLE practice_program_lessons ENABLE ROW LEVEL SECURITY;
+CREATE POLICY practice_program_lessons_access ON practice_program_lessons FOR ALL USING (EXISTS (SELECT 1 FROM practice_programs p WHERE p.practice_program_id = practice_program_lessons.program_id)) WITH CHECK (EXISTS (SELECT 1 FROM practice_programs p WHERE p.practice_program_id = practice_program_lessons.program_id));
 
 ALTER TABLE practice_attempts ENABLE ROW LEVEL SECURITY;
-CREATE POLICY practice_attempts_select ON practice_attempts FOR SELECT USING (tenant_id = app_tenant_id() AND app_can_access_owner(user_id));
-CREATE POLICY practice_attempts_insert ON practice_attempts FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(user_id));
-CREATE POLICY practice_attempts_update ON practice_attempts FOR UPDATE USING (tenant_id = app_tenant_id() AND app_can_access_owner(user_id)) WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(user_id));
-CREATE POLICY practice_attempts_delete ON practice_attempts FOR DELETE USING (tenant_id = app_tenant_id() AND app_can_access_owner(user_id));
+CREATE POLICY practice_attempts_select ON practice_attempts FOR SELECT USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY practice_attempts_insert ON practice_attempts FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY practice_attempts_update ON practice_attempts FOR UPDATE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id)) WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY practice_attempts_delete ON practice_attempts FOR DELETE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
 
 ALTER TABLE lesson_feedback ENABLE ROW LEVEL SECURITY;
-CREATE POLICY lesson_feedback_select ON lesson_feedback FOR SELECT USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY lesson_feedback_insert ON lesson_feedback FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY lesson_feedback_update ON lesson_feedback FOR UPDATE USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id)) WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY lesson_feedback_delete ON lesson_feedback FOR DELETE USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
+CREATE POLICY lesson_feedback_select ON lesson_feedback FOR SELECT USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY lesson_feedback_insert ON lesson_feedback FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY lesson_feedback_update ON lesson_feedback FOR UPDATE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id)) WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY lesson_feedback_delete ON lesson_feedback FOR DELETE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
 
 ALTER TABLE mock_meetings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY mock_meetings_select ON mock_meetings FOR SELECT USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY mock_meetings_insert ON mock_meetings FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY mock_meetings_update ON mock_meetings FOR UPDATE USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id)) WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
-CREATE POLICY mock_meetings_delete ON mock_meetings FOR DELETE USING (tenant_id = app_tenant_id() AND app_can_access_owner(rep_id));
+CREATE POLICY mock_meetings_select ON mock_meetings FOR SELECT USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY mock_meetings_insert ON mock_meetings FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY mock_meetings_update ON mock_meetings FOR UPDATE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id)) WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY mock_meetings_delete ON mock_meetings FOR DELETE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
 
 ALTER TABLE mock_meeting_focus_cues ENABLE ROW LEVEL SECURITY;
-CREATE POLICY mock_meeting_focus_cues_access ON mock_meeting_focus_cues FOR ALL USING (EXISTS (SELECT 1 FROM mock_meetings p WHERE p.id = mock_meeting_focus_cues.mock_meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM mock_meetings p WHERE p.id = mock_meeting_focus_cues.mock_meeting_id));
+CREATE POLICY mock_meeting_focus_cues_access ON mock_meeting_focus_cues FOR ALL USING (EXISTS (SELECT 1 FROM mock_meetings p WHERE p.mock_meeting_id = mock_meeting_focus_cues.mock_meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM mock_meetings p WHERE p.mock_meeting_id = mock_meeting_focus_cues.mock_meeting_id));
 
 ALTER TABLE mock_meeting_points ENABLE ROW LEVEL SECURITY;
-CREATE POLICY mock_meeting_points_access ON mock_meeting_points FOR ALL USING (EXISTS (SELECT 1 FROM mock_meetings p WHERE p.id = mock_meeting_points.mock_meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM mock_meetings p WHERE p.id = mock_meeting_points.mock_meeting_id));
+CREATE POLICY mock_meeting_points_access ON mock_meeting_points FOR ALL USING (EXISTS (SELECT 1 FROM mock_meetings p WHERE p.mock_meeting_id = mock_meeting_points.mock_meeting_id)) WITH CHECK (EXISTS (SELECT 1 FROM mock_meetings p WHERE p.mock_meeting_id = mock_meeting_points.mock_meeting_id));
 
 ALTER TABLE live_assist_sessions ENABLE ROW LEVEL SECURITY;
-CREATE POLICY live_assist_sessions_select ON live_assist_sessions FOR SELECT USING (tenant_id = app_tenant_id() AND app_can_access_owner(user_id));
-CREATE POLICY live_assist_sessions_insert ON live_assist_sessions FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(user_id));
-CREATE POLICY live_assist_sessions_update ON live_assist_sessions FOR UPDATE USING (tenant_id = app_tenant_id() AND app_can_access_owner(user_id)) WITH CHECK (tenant_id = app_tenant_id() AND app_can_access_owner(user_id));
-CREATE POLICY live_assist_sessions_delete ON live_assist_sessions FOR DELETE USING (tenant_id = app_tenant_id() AND app_can_access_owner(user_id));
+CREATE POLICY live_assist_sessions_select ON live_assist_sessions FOR SELECT USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY live_assist_sessions_insert ON live_assist_sessions FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY live_assist_sessions_update ON live_assist_sessions FOR UPDATE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id)) WITH CHECK (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
+CREATE POLICY live_assist_sessions_delete ON live_assist_sessions FOR DELETE USING (app_in_my_client(client_user_id) AND app_can_access_owner(client_user_id));
 
 ALTER TABLE automations ENABLE ROW LEVEL SECURITY;
-CREATE POLICY automations_select ON automations FOR SELECT USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
-CREATE POLICY automations_insert ON automations FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
-CREATE POLICY automations_update ON automations FOR UPDATE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager')) WITH CHECK (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
-CREATE POLICY automations_delete ON automations FOR DELETE USING (tenant_id = app_tenant_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY automations_select ON automations FOR SELECT USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager', 'sales_rep'));
+CREATE POLICY automations_insert ON automations FOR INSERT WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY automations_update ON automations FOR UPDATE USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager')) WITH CHECK (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
+CREATE POLICY automations_delete ON automations FOR DELETE USING (client_id = app_client_id() AND app_role() IN ('client_admin', 'manager'));
 
 ALTER TABLE automation_runs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY automation_runs_access ON automation_runs FOR ALL USING (EXISTS (SELECT 1 FROM automations p WHERE p.id = automation_runs.automation_id)) WITH CHECK (EXISTS (SELECT 1 FROM automations p WHERE p.id = automation_runs.automation_id));
+CREATE POLICY automation_runs_access ON automation_runs FOR ALL USING (EXISTS (SELECT 1 FROM automations p WHERE p.automation_id = automation_runs.automation_id)) WITH CHECK (EXISTS (SELECT 1 FROM automations p WHERE p.automation_id = automation_runs.automation_id));
 
 ALTER TABLE chat_threads ENABLE ROW LEVEL SECURITY;
-CREATE POLICY chat_threads_select ON chat_threads FOR SELECT USING (tenant_id = app_tenant_id() AND user_id = app_user_id());
-CREATE POLICY chat_threads_insert ON chat_threads FOR INSERT WITH CHECK (tenant_id = app_tenant_id() AND user_id = app_user_id());
-CREATE POLICY chat_threads_update ON chat_threads FOR UPDATE USING (tenant_id = app_tenant_id() AND user_id = app_user_id()) WITH CHECK (tenant_id = app_tenant_id() AND user_id = app_user_id());
-CREATE POLICY chat_threads_delete ON chat_threads FOR DELETE USING (tenant_id = app_tenant_id() AND user_id = app_user_id());
+CREATE POLICY chat_threads_select ON chat_threads FOR SELECT USING (app_in_my_client(client_user_id) AND client_user_id = app_user_id());
+CREATE POLICY chat_threads_insert ON chat_threads FOR INSERT WITH CHECK (app_in_my_client(client_user_id) AND client_user_id = app_user_id());
+CREATE POLICY chat_threads_update ON chat_threads FOR UPDATE USING (app_in_my_client(client_user_id) AND client_user_id = app_user_id()) WITH CHECK (app_in_my_client(client_user_id) AND client_user_id = app_user_id());
+CREATE POLICY chat_threads_delete ON chat_threads FOR DELETE USING (app_in_my_client(client_user_id) AND client_user_id = app_user_id());
 
 ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
-CREATE POLICY chat_messages_access ON chat_messages FOR ALL USING (EXISTS (SELECT 1 FROM chat_threads p WHERE p.id = chat_messages.thread_id)) WITH CHECK (EXISTS (SELECT 1 FROM chat_threads p WHERE p.id = chat_messages.thread_id));
+CREATE POLICY chat_messages_access ON chat_messages FOR ALL USING (EXISTS (SELECT 1 FROM chat_threads p WHERE p.chat_thread_id = chat_messages.thread_id)) WITH CHECK (EXISTS (SELECT 1 FROM chat_threads p WHERE p.chat_thread_id = chat_messages.thread_id));
 
 -- updated_at is set by the database, never trusted from the client
+CREATE TRIGGER trg_platform_owner_users_updated BEFORE UPDATE ON platform_owner_users FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_plans_updated BEFORE UPDATE ON plans FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_tenants_updated BEFORE UPDATE ON tenants FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_users_updated BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_platform_limits_updated BEFORE UPDATE ON platform_limits FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_clients_updated BEFORE UPDATE ON clients FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_client_users_updated BEFORE UPDATE ON client_users FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_auth_identities_updated BEFORE UPDATE ON auth_identities FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_invitations_updated BEFORE UPDATE ON invitations FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_manager_assignments_updated BEFORE UPDATE ON manager_assignments FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_notifications_updated BEFORE UPDATE ON notifications FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_invoices_updated BEFORE UPDATE ON invoices FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_integrations_updated BEFORE UPDATE ON integrations FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_integration_credentials_updated BEFORE UPDATE ON integration_credentials FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_integration_sync_runs_updated BEFORE UPDATE ON integration_sync_runs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_integration_events_updated BEFORE UPDATE ON integration_events FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_crm_stage_mappings_updated BEFORE UPDATE ON crm_stage_mappings FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_crm_activities_updated BEFORE UPDATE ON crm_activities FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_leads_updated BEFORE UPDATE ON leads FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_lead_stakeholders_updated BEFORE UPDATE ON lead_stakeholders FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_media_files_updated BEFORE UPDATE ON media_files FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_meetings_updated BEFORE UPDATE ON meetings FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_lead_timeline_events_updated BEFORE UPDATE ON lead_timeline_events FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_lead_risks_updated BEFORE UPDATE ON lead_risks FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_analysis_runs_updated BEFORE UPDATE ON analysis_runs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_meeting_insights_updated BEFORE UPDATE ON meeting_insights FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_cues_updated BEFORE UPDATE ON cues FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_transcript_segments_updated BEFORE UPDATE ON transcript_segments FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_meeting_cue_scores_updated BEFORE UPDATE ON meeting_cue_scores FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_meeting_objections_updated BEFORE UPDATE ON meeting_objections FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_knowledge_sources_updated BEFORE UPDATE ON knowledge_sources FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_company_documents_updated BEFORE UPDATE ON company_documents FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_knowledge_chunks_updated BEFORE UPDATE ON knowledge_chunks FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_practice_catalog_updated BEFORE UPDATE ON practice_catalog FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_practice_lessons_updated BEFORE UPDATE ON practice_lessons FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_coaching_programs_updated BEFORE UPDATE ON coaching_programs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_practice_programs_updated BEFORE UPDATE ON practice_programs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_practice_program_lessons_updated BEFORE UPDATE ON practice_program_lessons FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_lesson_feedback_updated BEFORE UPDATE ON lesson_feedback FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_mock_meetings_updated BEFORE UPDATE ON mock_meetings FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_mock_meeting_points_updated BEFORE UPDATE ON mock_meeting_points FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_live_assist_sessions_updated BEFORE UPDATE ON live_assist_sessions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_automations_updated BEFORE UPDATE ON automations FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_chat_threads_updated BEFORE UPDATE ON chat_threads FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_chat_messages_updated BEFORE UPDATE ON chat_messages FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- created_by / updated_by / deleted_by are stamped from the session by the database, never trusted from the client
+CREATE TRIGGER trg_plans_audit BEFORE INSERT OR UPDATE ON plans FOR EACH ROW EXECUTE FUNCTION set_audit_columns('platform');
+CREATE TRIGGER trg_platform_limits_audit BEFORE INSERT OR UPDATE ON platform_limits FOR EACH ROW EXECUTE FUNCTION set_audit_columns('platform');
+CREATE TRIGGER trg_clients_audit BEFORE INSERT OR UPDATE ON clients FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_client_users_audit BEFORE INSERT OR UPDATE ON client_users FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_invitations_audit BEFORE INSERT OR UPDATE ON invitations FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_integrations_audit BEFORE INSERT OR UPDATE ON integrations FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_crm_stage_mappings_audit BEFORE INSERT OR UPDATE ON crm_stage_mappings FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_leads_audit BEFORE INSERT OR UPDATE ON leads FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_lead_stakeholders_audit BEFORE INSERT OR UPDATE ON lead_stakeholders FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_media_files_audit BEFORE INSERT OR UPDATE ON media_files FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_meetings_audit BEFORE INSERT OR UPDATE ON meetings FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_lead_timeline_events_audit BEFORE INSERT OR UPDATE ON lead_timeline_events FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_lead_risks_audit BEFORE INSERT OR UPDATE ON lead_risks FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_cues_audit BEFORE INSERT OR UPDATE ON cues FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_knowledge_sources_audit BEFORE INSERT OR UPDATE ON knowledge_sources FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_company_documents_audit BEFORE INSERT OR UPDATE ON company_documents FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_practice_catalog_audit BEFORE INSERT OR UPDATE ON practice_catalog FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_practice_lessons_audit BEFORE INSERT OR UPDATE ON practice_lessons FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_practice_programs_audit BEFORE INSERT OR UPDATE ON practice_programs FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_lesson_feedback_audit BEFORE INSERT OR UPDATE ON lesson_feedback FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_mock_meetings_audit BEFORE INSERT OR UPDATE ON mock_meetings FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_automations_audit BEFORE INSERT OR UPDATE ON automations FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
+CREATE TRIGGER trg_chat_threads_audit BEFORE INSERT OR UPDATE ON chat_threads FOR EACH ROW EXECUTE FUNCTION set_audit_columns('client');
 
 -- Ledgers and audit trails can only grow
 CREATE TRIGGER trg_platform_audit_log_immutable BEFORE UPDATE OR DELETE ON platform_audit_log FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
@@ -1399,20 +1640,20 @@ CREATE TRIGGER trg_credit_transactions_immutable BEFORE UPDATE OR DELETE ON cred
 -- Rules the database enforces itself
 -- ================================================================
 
--- users: one manager per rep, in the same company, and only an admin may change who someone is.
-CREATE FUNCTION users_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE v_mgr users%ROWTYPE; v_actor text := app_role();
+-- client_users: one manager per rep, in the same company, and only an admin may change who someone is.
+CREATE FUNCTION client_users_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE v_mgr client_users%ROWTYPE; v_actor text := app_role();
 BEGIN
   IF TG_OP = 'UPDATE' AND v_actor IS NOT NULL AND v_actor NOT IN ('client_admin', 'super_admin') THEN
-    IF NEW.role IS DISTINCT FROM OLD.role OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+    IF NEW.role IS DISTINCT FROM OLD.role OR NEW.client_id IS DISTINCT FROM OLD.client_id
        OR NEW.manager_id IS DISTINCT FROM OLD.manager_id OR NEW.status IS DISTINCT FROM OLD.status
        OR NEW.email IS DISTINCT FROM OLD.email THEN
       RAISE EXCEPTION 'only an admin can change role, manager, status or email' USING ERRCODE = '42501';
     END IF;
   END IF;
   IF NEW.manager_id IS NOT NULL THEN
-    SELECT * INTO v_mgr FROM users WHERE id = NEW.manager_id;
-    IF NOT FOUND OR v_mgr.tenant_id IS DISTINCT FROM NEW.tenant_id OR v_mgr.role <> 'manager' THEN
+    SELECT * INTO v_mgr FROM client_users WHERE client_user_id = NEW.manager_id;
+    IF NOT FOUND OR v_mgr.client_id IS DISTINCT FROM NEW.client_id OR v_mgr.role <> 'manager' THEN
       RAISE EXCEPTION 'manager_id must be a manager in the same company' USING ERRCODE = '23514';
     END IF;
     IF v_mgr.status <> 'active' OR v_mgr.deleted_at IS NOT NULL THEN
@@ -1421,48 +1662,48 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER trg_users_guard BEFORE INSERT OR UPDATE ON users FOR EACH ROW EXECUTE FUNCTION users_guard();
+CREATE TRIGGER trg_client_users_guard BEFORE INSERT OR UPDATE ON client_users FOR EACH ROW EXECUTE FUNCTION client_users_guard();
 
--- users: the plan's seat limit. Locks the tenant row so two invites cannot both take the last seat.
-CREATE FUNCTION users_seat_limit() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+-- client_users: the plan's seat limit. Locks the client row so two invites cannot both take the last seat.
+CREATE FUNCTION client_users_seat_limit() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_limit int; v_used int;
 BEGIN
-  IF NEW.tenant_id IS NULL OR NEW.status <> 'active' OR NEW.deleted_at IS NOT NULL THEN RETURN NEW; END IF;
-  IF TG_OP = 'UPDATE' AND OLD.status = 'active' AND OLD.deleted_at IS NULL AND OLD.tenant_id = NEW.tenant_id THEN RETURN NEW; END IF;
-  SELECT p.seat_limit INTO v_limit FROM tenants t JOIN plans p ON p.id = t.plan_id WHERE t.id = NEW.tenant_id FOR UPDATE OF t;
+  IF NEW.client_id IS NULL OR NEW.status <> 'active' OR NEW.deleted_at IS NOT NULL THEN RETURN NEW; END IF;
+  IF TG_OP = 'UPDATE' AND OLD.status = 'active' AND OLD.deleted_at IS NULL AND OLD.client_id = NEW.client_id THEN RETURN NEW; END IF;
+  SELECT p.seat_limit INTO v_limit FROM clients t JOIN plans p ON p.plan_id = t.plan_id WHERE t.client_id = NEW.client_id FOR UPDATE OF t;
   IF v_limit IS NULL THEN RETURN NEW; END IF;
-  SELECT count(*) INTO v_used FROM users
-   WHERE tenant_id = NEW.tenant_id AND status = 'active' AND deleted_at IS NULL AND id <> NEW.id;
+  SELECT count(*) INTO v_used FROM client_users
+   WHERE client_id = NEW.client_id AND status = 'active' AND deleted_at IS NULL AND client_user_id <> NEW.client_user_id;
   IF v_used >= v_limit THEN
     RAISE EXCEPTION 'the plan allows % seats and all are used', v_limit USING ERRCODE = '53400';
   END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER trg_users_seat_limit BEFORE INSERT OR UPDATE OF status, tenant_id, deleted_at ON users FOR EACH ROW EXECUTE FUNCTION users_seat_limit();
+CREATE TRIGGER trg_client_users_seat_limit BEFORE INSERT OR UPDATE OF status, client_id, deleted_at ON client_users FOR EACH ROW EXECUTE FUNCTION client_users_seat_limit();
 
--- users: keep the assignment history, and leave a manager's reps unassigned when that manager stops being one.
-CREATE FUNCTION users_after() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+-- client_users: keep the assignment history, and leave a manager's reps unassigned when that manager stops being one.
+CREATE FUNCTION client_users_after() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NEW.manager_id IS NOT NULL THEN
-      INSERT INTO manager_assignments(tenant_id, rep_id, manager_id, assigned_by) VALUES (NEW.tenant_id, NEW.id, NEW.manager_id, app_user_id());
+      INSERT INTO manager_assignments(client_user_id, manager_id, assigned_by) VALUES (NEW.client_user_id, NEW.manager_id, app_client_user_id());
     END IF;
     RETURN NEW;
   END IF;
   IF NEW.manager_id IS DISTINCT FROM OLD.manager_id THEN
-    UPDATE manager_assignments SET ended_at = now() WHERE rep_id = NEW.id AND ended_at IS NULL;
+    UPDATE manager_assignments SET ended_at = now() WHERE client_user_id = NEW.client_user_id AND ended_at IS NULL;
     IF NEW.manager_id IS NOT NULL THEN
-      INSERT INTO manager_assignments(tenant_id, rep_id, manager_id, assigned_by) VALUES (NEW.tenant_id, NEW.id, NEW.manager_id, app_user_id());
+      INSERT INTO manager_assignments(client_user_id, manager_id, assigned_by) VALUES (NEW.client_user_id, NEW.manager_id, app_client_user_id());
     END IF;
-    INSERT INTO audit_log(tenant_id, actor_id, action, entity_type, entity_id, detail)
-    VALUES (NEW.tenant_id, app_user_id(), 'rep.reassigned', 'user', NEW.id, jsonb_build_object('from', OLD.manager_id, 'to', NEW.manager_id));
+    INSERT INTO audit_log(client_id, actor_id, action, entity_type, entity_id, detail)
+    VALUES (NEW.client_id, app_client_user_id(), 'rep.reassigned', 'user', NEW.client_user_id, jsonb_build_object('from', OLD.manager_id, 'to', NEW.manager_id));
   END IF;
   IF OLD.role = 'manager' AND (NEW.role <> 'manager' OR NEW.status <> 'active' OR NEW.deleted_at IS NOT NULL) THEN
-    UPDATE users SET manager_id = NULL WHERE manager_id = NEW.id;
+    UPDATE client_users SET manager_id = NULL WHERE manager_id = NEW.client_user_id;
   END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER trg_users_after AFTER INSERT OR UPDATE ON users FOR EACH ROW EXECUTE FUNCTION users_after();
+CREATE TRIGGER trg_client_users_after AFTER INSERT OR UPDATE ON client_users FOR EACH ROW EXECUTE FUNCTION client_users_after();
 
 -- leads: restart "days in stage" when the stage changes.
 CREATE FUNCTION leads_stage_clock() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -1481,8 +1722,8 @@ BEGIN
     WHERE x IS NOT NULL
   LOOP
     UPDATE leads l SET last_meeting_at =
-      (SELECT max(coalesce(m.meeting_at, m.uploaded_at)) FROM meetings m WHERE m.lead_id = l.id AND m.deleted_at IS NULL)
-    WHERE l.id = v_lead;
+      (SELECT max(coalesce(m.meeting_at, m.uploaded_at)) FROM meetings m WHERE m.lead_id = l.lead_id AND m.deleted_at IS NULL)
+    WHERE l.lead_id = v_lead;
   END LOOP;
   RETURN NULL;
 END $$;
@@ -1493,7 +1734,7 @@ CREATE TRIGGER trg_meetings_refresh_lead AFTER INSERT OR DELETE OR UPDATE OF lea
 CREATE FUNCTION objections_check() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.segment_id IS NOT NULL AND NOT EXISTS (
-       SELECT 1 FROM transcript_segments s WHERE s.id = NEW.segment_id AND s.meeting_id = NEW.meeting_id AND s.speaker_role = 'prospect') THEN
+       SELECT 1 FROM transcript_segments s WHERE s.transcript_segment_id = NEW.segment_id AND s.meeting_id = NEW.meeting_id AND s.speaker_role = 'prospect') THEN
     RAISE EXCEPTION 'an objection must point at a buyer line of the same meeting' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
@@ -1504,7 +1745,7 @@ CREATE TRIGGER trg_meeting_objections_check BEFORE INSERT OR UPDATE ON meeting_o
 CREATE FUNCTION media_files_retention() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   IF NEW.retention_until IS NULL THEN
-    SELECT now() + make_interval(days => recording_retention_days) INTO NEW.retention_until FROM tenants WHERE id = NEW.tenant_id;
+    SELECT now() + make_interval(days => recording_retention_days) INTO NEW.retention_until FROM clients WHERE client_id = NEW.client_id;
   END IF;
   RETURN NEW;
 END $$;
@@ -1514,42 +1755,81 @@ CREATE TRIGGER trg_media_files_retention BEFORE INSERT ON media_files FOR EACH R
 CREATE FUNCTION cue_scores_check() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.evidence_segment_id IS NOT NULL AND NOT EXISTS (
-       SELECT 1 FROM transcript_segments s WHERE s.id = NEW.evidence_segment_id AND s.meeting_id = NEW.meeting_id) THEN
+       SELECT 1 FROM transcript_segments s WHERE s.transcript_segment_id = NEW.evidence_segment_id AND s.meeting_id = NEW.meeting_id) THEN
     RAISE EXCEPTION 'evidence must point at a line of the same meeting' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
 END $$;
 CREATE TRIGGER trg_meeting_cue_scores_check BEFORE INSERT OR UPDATE ON meeting_cue_scores FOR EACH ROW EXECUTE FUNCTION cue_scores_check();
 
+-- Same company, checked by trigger.
+-- Some tables have no client_id: they name the person they belong to (client_user_id) and the company is that person's.
+-- A row may only point at other rows of that same company. company_of() finds the company of a row in any of the tables below.
+CREATE FUNCTION company_of(p_table text, p_id uuid) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  SELECT CASE p_table
+    WHEN 'client_users'     THEN (SELECT client_id FROM client_users WHERE client_user_id = p_id)
+    WHEN 'leads'            THEN (SELECT u.client_id FROM leads l JOIN client_users u ON u.client_user_id = l.client_user_id WHERE l.lead_id = p_id)
+    WHEN 'meetings'         THEN (SELECT u.client_id FROM meetings m JOIN client_users u ON u.client_user_id = m.client_user_id WHERE m.meeting_id = p_id)
+    WHEN 'integrations'     THEN (SELECT client_id FROM integrations WHERE integration_id = p_id)
+    WHEN 'media_files'      THEN (SELECT client_id FROM media_files WHERE media_file_id = p_id)
+    WHEN 'crm_activities'   THEN (SELECT client_id FROM crm_activities WHERE crm_activity_id = p_id)
+    ELSE NULL
+  END
+$$;
+-- Trigger arguments: first the company source ('client_id' or 'owner:<column>'), then one 'column:table' for each link to check.
+CREATE FUNCTION same_company_links() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE v_row jsonb := to_jsonb(NEW); v_company uuid; v_link text; v_col text; v_tbl text; v_id uuid;
+BEGIN
+  IF TG_ARGV[0] = 'client_id' THEN v_company := (v_row->>'client_id')::uuid;
+  ELSE v_company := company_of('client_users', (v_row->>substr(TG_ARGV[0], 7))::uuid);
+  END IF;
+  FOR i IN 1 .. TG_NARGS - 1 LOOP
+    v_link := TG_ARGV[i]; v_col := split_part(v_link, ':', 1); v_tbl := split_part(v_link, ':', 2);
+    v_id := (v_row->>v_col)::uuid;
+    IF v_id IS NOT NULL AND company_of(v_tbl, v_id) IS DISTINCT FROM v_company THEN
+      RAISE EXCEPTION '% points at a % of another company', v_col, v_tbl USING ERRCODE = '23514';
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_meetings_same_company             BEFORE INSERT OR UPDATE ON meetings              FOR EACH ROW EXECUTE FUNCTION same_company_links('owner:client_user_id', 'lead_id:leads', 'integration_id:integrations', 'media_file_id:media_files', 'crm_activity_id:crm_activities');
+CREATE TRIGGER trg_manager_assignments_same_company  BEFORE INSERT OR UPDATE ON manager_assignments   FOR EACH ROW EXECUTE FUNCTION same_company_links('owner:client_user_id', 'manager_id:client_users', 'assigned_by:client_users');
+CREATE TRIGGER trg_practice_lessons_same_company     BEFORE INSERT OR UPDATE ON practice_lessons      FOR EACH ROW EXECUTE FUNCTION same_company_links('owner:client_user_id', 'created_by:client_users', 'meeting_id:meetings', 'lead_id:leads');
+CREATE TRIGGER trg_practice_programs_same_company    BEFORE INSERT OR UPDATE ON practice_programs     FOR EACH ROW EXECUTE FUNCTION same_company_links('owner:client_user_id', 'lead_id:leads');
+CREATE TRIGGER trg_lesson_feedback_same_company      BEFORE INSERT OR UPDATE ON lesson_feedback       FOR EACH ROW EXECUTE FUNCTION same_company_links('owner:client_user_id', 'manager_id:client_users');
+CREATE TRIGGER trg_mock_meetings_same_company        BEFORE INSERT OR UPDATE ON mock_meetings         FOR EACH ROW EXECUTE FUNCTION same_company_links('owner:client_user_id', 'source_meeting_id:meetings');
+CREATE TRIGGER trg_live_assist_sessions_same_company BEFORE INSERT OR UPDATE ON live_assist_sessions  FOR EACH ROW EXECUTE FUNCTION same_company_links('owner:client_user_id', 'meeting_id:meetings');
+CREATE TRIGGER trg_chat_threads_same_company         BEFORE INSERT OR UPDATE ON chat_threads          FOR EACH ROW EXECUTE FUNCTION same_company_links('owner:client_user_id', 'lead_id:leads');
+
 -- ================================================================
 -- Functions the API and workers call
 -- ================================================================
 
 -- Spend credits. One row lock per company, a ledger line, and a retry with the same key charges once.
-CREATE FUNCTION consume_credits(p_tenant uuid, p_user uuid, p_activity text, p_credits int,
+CREATE FUNCTION consume_credits(p_client uuid, p_user uuid, p_activity text, p_credits int,
                                 p_idem text DEFAULT NULL, p_ref_type text DEFAULT NULL, p_ref_id uuid DEFAULT NULL)
 RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_balance int; v_prior int;
 BEGIN
   IF p_credits <= 0 THEN RAISE EXCEPTION 'credits must be positive'; END IF;
-  IF app_role() IS NOT NULL AND p_tenant IS DISTINCT FROM app_tenant_id() THEN
+  IF app_role() IS NOT NULL AND p_client IS DISTINCT FROM app_client_id() THEN
     RAISE EXCEPTION 'wrong company' USING ERRCODE = '42501';
   END IF;
   IF p_idem IS NOT NULL THEN
-    SELECT balance_after INTO v_prior FROM credit_transactions WHERE tenant_id = p_tenant AND idempotency_key = p_idem;
+    SELECT balance_after INTO v_prior FROM credit_transactions WHERE client_id = p_client AND idempotency_key = p_idem;
     IF FOUND THEN RETURN v_prior; END IF;
   END IF;
-  SELECT credit_balance INTO v_balance FROM tenants WHERE id = p_tenant FOR UPDATE;
+  SELECT credit_balance INTO v_balance FROM clients WHERE client_id = p_client FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'unknown company'; END IF;
   IF v_balance < p_credits THEN RAISE EXCEPTION 'not enough credits (% left, % needed)', v_balance, p_credits USING ERRCODE = 'P0001'; END IF;
-  UPDATE tenants SET credit_balance = v_balance - p_credits WHERE id = p_tenant;
-  INSERT INTO credit_transactions(tenant_id, user_id, activity, kind, credits_consumed, balance_after, ref_type, ref_id, idempotency_key)
-  VALUES (p_tenant, p_user, p_activity, 'consume', p_credits, v_balance - p_credits, p_ref_type, p_ref_id, p_idem);
+  UPDATE clients SET credit_balance = v_balance - p_credits WHERE client_id = p_client;
+  INSERT INTO credit_transactions(client_id, user_id, activity, kind, credits_consumed, balance_after, ref_type, ref_id, idempotency_key)
+  VALUES (p_client, p_user, p_activity, 'consume', p_credits, v_balance - p_credits, p_ref_type, p_ref_id, p_idem);
   RETURN v_balance - p_credits;
 END $$;
 
 -- Add credits (monthly plan refill, top-up, refund). Platform or worker only.
-CREATE FUNCTION grant_credits(p_tenant uuid, p_credits int, p_activity text, p_kind text DEFAULT 'grant', p_idem text DEFAULT NULL)
+CREATE FUNCTION grant_credits(p_client uuid, p_credits int, p_activity text, p_kind text DEFAULT 'grant', p_idem text DEFAULT NULL)
 RETURNS int LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_balance int; v_prior int;
 BEGIN
@@ -1557,51 +1837,51 @@ BEGIN
   IF app_role() IS NOT NULL AND app_role() <> 'super_admin' THEN RAISE EXCEPTION 'not allowed' USING ERRCODE = '42501'; END IF;
   IF p_kind NOT IN ('grant', 'refund', 'adjust') THEN RAISE EXCEPTION 'bad kind'; END IF;
   IF p_idem IS NOT NULL THEN
-    SELECT balance_after INTO v_prior FROM credit_transactions WHERE tenant_id = p_tenant AND idempotency_key = p_idem;
+    SELECT balance_after INTO v_prior FROM credit_transactions WHERE client_id = p_client AND idempotency_key = p_idem;
     IF FOUND THEN RETURN v_prior; END IF;
   END IF;
-  SELECT credit_balance INTO v_balance FROM tenants WHERE id = p_tenant FOR UPDATE;
+  SELECT credit_balance INTO v_balance FROM clients WHERE client_id = p_client FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'unknown company'; END IF;
-  UPDATE tenants SET credit_balance = v_balance + p_credits WHERE id = p_tenant;
-  INSERT INTO credit_transactions(tenant_id, user_id, activity, kind, credits_consumed, balance_after, idempotency_key)
-  VALUES (p_tenant, app_user_id(), p_activity, p_kind, -p_credits, v_balance + p_credits, p_idem);
+  UPDATE clients SET credit_balance = v_balance + p_credits WHERE client_id = p_client;
+  INSERT INTO credit_transactions(client_id, user_id, activity, kind, credits_consumed, balance_after, idempotency_key)
+  VALUES (p_client, app_client_user_id(), p_activity, p_kind, -p_credits, v_balance + p_credits, p_idem);
   RETURN v_balance + p_credits;
 END $$;
 
 -- On Salesforce connect: load the standard stage names. The admin edits them afterwards.
-CREATE FUNCTION seed_salesforce_stage_mappings(p_tenant uuid) RETURNS void
+CREATE FUNCTION seed_salesforce_stage_mappings(p_client uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
-  IF app_role() IS NOT NULL AND p_tenant IS DISTINCT FROM app_tenant_id() THEN RAISE EXCEPTION 'wrong company' USING ERRCODE = '42501'; END IF;
-  INSERT INTO crm_stage_mappings(tenant_id, crm_stage, sellmore_stage) VALUES
-    (p_tenant, 'Prospecting', 'Discovery'), (p_tenant, 'Qualification', 'Discovery'), (p_tenant, 'Needs Analysis', 'Discovery'),
-    (p_tenant, 'Technical Validation', 'Technical Review'), (p_tenant, 'Value Proposition', 'Technical Review'),
-    (p_tenant, 'Proposal/Price Quote', 'Commercial Proposal'), (p_tenant, 'Negotiation/Review', 'Negotiation'),
-    (p_tenant, 'Closed Won', 'Closed Won'), (p_tenant, 'Closed Lost', 'Closed Lost')
-  ON CONFLICT (tenant_id, crm_stage) DO NOTHING;
+  IF app_role() IS NOT NULL AND p_client IS DISTINCT FROM app_client_id() THEN RAISE EXCEPTION 'wrong company' USING ERRCODE = '42501'; END IF;
+  INSERT INTO crm_stage_mappings(client_id, crm_stage, sellmore_stage) VALUES
+    (p_client, 'Prospecting', 'Discovery'), (p_client, 'Qualification', 'Discovery'), (p_client, 'Needs Analysis', 'Discovery'),
+    (p_client, 'Technical Validation', 'Technical Review'), (p_client, 'Value Proposition', 'Technical Review'),
+    (p_client, 'Proposal/Price Quote', 'Commercial Proposal'), (p_client, 'Negotiation/Review', 'Negotiation'),
+    (p_client, 'Closed Won', 'Closed Won'), (p_client, 'Closed Lost', 'Closed Lost')
+  ON CONFLICT (client_id, crm_stage) DO NOTHING;
 END $$;
 
 -- Nightly retention job (worker). When a recording expires it:
 --   hides the media file and returns its object key, so the worker can delete the file;
 --   clears the copies of the call content that depend on it: the raw speech-to-text, the turn embeddings
 --   and the model's raw replies. The cleaned transcript and the analysis stay, as the product's record of the call.
-CREATE FUNCTION expire_media() RETURNS TABLE(id uuid, storage_key text) LANGUAGE sql AS $$
+CREATE FUNCTION expire_media() RETURNS TABLE(media_file_id uuid, storage_key text) LANGUAGE sql AS $$
   WITH expired AS (
     UPDATE media_files SET deleted_at = now()
     WHERE retention_until < now() AND deleted_at IS NULL
-    RETURNING media_files.id, media_files.storage_key
+    RETURNING media_files.media_file_id, media_files.storage_key
   ), purge_segments AS (
     UPDATE transcript_segments s SET raw_text = NULL, embeddings = NULL, embedding_model = NULL, embedded_at = NULL
-    FROM meetings m JOIN expired e ON e.id = m.media_file_id
-    WHERE s.meeting_id = m.id
-    RETURNING s.id
+    FROM meetings m JOIN expired e ON e.media_file_id = m.media_file_id
+    WHERE s.meeting_id = m.meeting_id
+    RETURNING s.transcript_segment_id
   ), purge_runs AS (
     UPDATE analysis_runs r SET raw_output = NULL
-    FROM meetings m JOIN expired e ON e.id = m.media_file_id
-    WHERE r.meeting_id = m.id
-    RETURNING r.id
+    FROM meetings m JOIN expired e ON e.media_file_id = m.media_file_id
+    WHERE r.meeting_id = m.meeting_id
+    RETURNING r.analysis_run_id
   )
-  SELECT expired.id, expired.storage_key FROM expired
+  SELECT expired.media_file_id, expired.storage_key FROM expired
 $$;
 
 -- ================================================================
@@ -1610,32 +1890,33 @@ $$;
 
 -- Deal screen numbers: calls, analysed calls, last call, days in stage.
 CREATE VIEW lead_stats WITH (security_invoker = true) AS
-SELECT l.id AS lead_id, l.tenant_id,
-       count(m.id)                                                         AS call_count,
-       count(m.id) FILTER (WHERE m.processing_status = 'analysed')         AS analysed_count,
+SELECT l.lead_id, u.client_id,
+       count(m.meeting_id)                                                 AS call_count,
+       count(m.meeting_id) FILTER (WHERE m.processing_status = 'analysed')         AS analysed_count,
        max(coalesce(m.meeting_at, m.uploaded_at))                          AS last_meeting_at,
        (now()::date - l.stage_changed_at::date)                            AS days_in_stage,
-       (SELECT count(*) FROM lead_timeline_events e WHERE e.lead_id = l.id AND e.type = 'email') AS email_count
+       (SELECT count(*) FROM lead_timeline_events e WHERE e.lead_id = l.lead_id AND e.type = 'email') AS email_count
 FROM leads l
-LEFT JOIN meetings m ON m.lead_id = l.id AND m.deleted_at IS NULL
+JOIN client_users u ON u.client_user_id = l.client_user_id
+LEFT JOIN meetings m ON m.lead_id = l.lead_id AND m.deleted_at IS NULL
 WHERE l.deleted_at IS NULL
-GROUP BY l.id;
+GROUP BY l.lead_id, u.client_id;
 
 -- Knowledge base "queries" column.
 CREATE VIEW knowledge_usage WITH (security_invoker = true) AS
-SELECT s.id AS source_id, s.tenant_id, count(c.id) AS queries_count
-FROM knowledge_sources s LEFT JOIN knowledge_citations c ON c.source_id = s.id
+SELECT s.knowledge_source_id AS source_id, s.client_id, count(c.knowledge_citation_id) AS queries_count
+FROM knowledge_sources s LEFT JOIN knowledge_citations c ON c.source_id = s.knowledge_source_id
 WHERE s.deleted_at IS NULL
-GROUP BY s.id;
+GROUP BY s.knowledge_source_id;
 
 -- Seats and meetings used. The super admin sees every company, a client admin sees their own.
 -- Counts only: this view runs as its owner so it can count rows the super admin may not read.
-CREATE VIEW tenant_usage AS
-SELECT t.id AS tenant_id,
-       (SELECT count(*) FROM users u WHERE u.tenant_id = t.id AND u.status = 'active' AND u.deleted_at IS NULL) AS seats_used,
-       (SELECT count(*) FROM meetings m WHERE m.tenant_id = t.id AND m.deleted_at IS NULL)                      AS meetings_used
-FROM tenants t
-WHERE app_role() = 'super_admin' OR t.id = app_tenant_id();
+CREATE VIEW client_usage AS
+SELECT t.client_id,
+       (SELECT count(*) FROM client_users u WHERE u.client_id = t.client_id AND u.status = 'active' AND u.deleted_at IS NULL) AS seats_used,
+       (SELECT count(*) FROM meetings m JOIN client_users u ON u.client_user_id = m.client_user_id WHERE u.client_id = t.client_id AND m.deleted_at IS NULL)                      AS meetings_used
+FROM clients t
+WHERE app_role() = 'super_admin' OR t.client_id = app_client_id();
 
 -- ================================================================
 -- Privileges. Row level security decides which rows, grants decide which tables and commands.
@@ -1656,8 +1937,9 @@ REVOKE UPDATE, DELETE ON credit_transactions, audit_log, platform_audit_log FROM
 GRANT EXECUTE ON FUNCTION expire_media() TO sellmore_worker;
 
 -- Sign-in service
-GRANT SELECT ON tenants, plans, users, invitations TO sellmore_auth;
-GRANT INSERT, UPDATE ON users, invitations TO sellmore_auth;
+GRANT SELECT ON clients, plans, client_users, invitations TO sellmore_auth;
+GRANT INSERT, UPDATE ON client_users, invitations TO sellmore_auth;
+GRANT SELECT, UPDATE ON platform_owner_users TO sellmore_auth;
 GRANT SELECT, INSERT, UPDATE, DELETE ON auth_identities TO sellmore_auth;
 GRANT INSERT ON audit_log TO sellmore_auth;
 
@@ -1665,19 +1947,25 @@ GRANT INSERT ON audit_log TO sellmore_auth;
 -- Reference data. Mirrors DEFAULT_PLATFORM_PLANS and DEFAULT_PLATFORM_LIMITS in src/store/useStore.ts.
 -- The 12 default cues come from createDefaultPlatformCues(); export them with the seed script, not by hand.
 -- ================================================================
-INSERT INTO plans(id, name, price_monthly, seat_limit, meeting_quota, monthly_credits, active, sort_order) VALUES
-  ('free',       'Free Evaluation',  0,   5,    10,   0,    true, 1),
-  ('starter',    'Starter Plan',     99,  10,   35,   100,  true, 2),
-  ('growth',     'Growth Plan',      249, 25,   NULL, 500,  true, 3),
-  ('enterprise', 'Enterprise Plan',  799, NULL, NULL, 2500, true, 4);
+-- trial_days: placeholder lengths, set the real ones in the admin screen. NULL = no free trial on that plan.
+INSERT INTO plans(plan_id, name, price_monthly, trial_days, seat_limit, meeting_quota, monthly_credits, active, sort_order) VALUES
+  ('free',       'Free Evaluation',  0,   NULL, 5,    10,   0,    true, 1),
+  ('starter',    'Starter Plan',     99,  14,   10,   35,   100,  true, 2),
+  ('growth',     'Growth Plan',      249, 14,   25,   NULL, 500,  true, 3),
+  ('enterprise', 'Enterprise Plan',  799, NULL, NULL, NULL, 2500, true, 4);
 
 INSERT INTO plan_features(plan_id, feature_key) VALUES
   ('free','manual_upload'), ('free','cue_scoring'),
   ('starter','manual_upload'), ('starter','cue_scoring'), ('starter','drive_sync'), ('starter','practice'), ('starter','document_tagging'),
   ('growth','manual_upload'), ('growth','cue_scoring'), ('growth','drive_sync'), ('growth','practice'), ('growth','document_tagging'),
-  ('growth','crm_sync'), ('growth','live_assist'), ('growth','mock_meetings'), ('growth','lead_coaching'),
+  ('growth','crm_sync'), ('growth','live_assist'), ('growth','mock_meetings'), ('growth','deal_practice'),
   ('enterprise','manual_upload'), ('enterprise','cue_scoring'), ('enterprise','drive_sync'), ('enterprise','practice'), ('enterprise','document_tagging'),
-  ('enterprise','crm_sync'), ('enterprise','live_assist'), ('enterprise','mock_meetings'), ('enterprise','lead_coaching'),
+  ('enterprise','crm_sync'), ('enterprise','live_assist'), ('enterprise','mock_meetings'), ('enterprise','deal_practice'),
   ('enterprise','crm_writeback'), ('enterprise','custom_speech');
 
-INSERT INTO platform_limits(id, formats, max_file_size_mb, max_duration_min, invite_expiry_hours) VALUES (1, 'MP4, MP3, TXT', 2048, 240, 48);
+-- One row per limit. To add a limit, insert a row: no schema change. Values are JSON.
+INSERT INTO platform_limits(limit_key, limit_value, description) VALUES
+  ('allowed_formats',     '["MP4", "MP3", "TXT"]', 'Meeting file types that can be uploaded'),
+  ('max_file_size_mb',    '2048',                  'Largest meeting file, in megabytes'),
+  ('max_duration_min',    '240',                   'Longest meeting file, in minutes'),
+  ('invite_expiry_hours', '48',                    'How long an invitation link stays valid');

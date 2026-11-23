@@ -1,0 +1,42 @@
+-- ===== Table 33: cues. The 12 platform defaults (client_id empty), then company versions: an override, custom, disabled and deleted. =====
+SELECT s.act_as_owner();
+INSERT INTO cues(cue_id, client_id, code, overrides_cue_id, name, category, description, instructions, enabled, updated_by, updated_by_owner_id, created_by, deleted_at, deleted_by) VALUES
+ (s.id(33,1),  NULL, 1,  NULL, 'Introduction & Rapport',  'Communication',        'Did salesperson introduce themselves, establish credibility and build rapport?',
+  'Did salesperson introduce themselves, establish credibility and build rapport?', true, NULL, NULL,       NULL, NULL, NULL),
+ (s.id(33,2),  NULL, 2,  NULL, 'Requirement Discovery',   'Discovery',            'Did they identify engineering requirements, project scope, constraints and expectations?',
+  'Did they identify engineering requirements, project scope, constraints and expectations?', true, NULL, NULL, NULL, NULL, NULL),
+ (s.id(33,3),  NULL, 3,  NULL, 'Questioning Skills',      'Discovery',            'Did they ask relevant open-ended and probing questions to uncover needs, priorities and decision criteria?',
+  'Did they ask relevant open-ended and probing questions to uncover needs, priorities and decision criteria?', true, NULL, NULL, NULL, NULL, NULL),
+ (s.id(33,4),  NULL, 4,  NULL, 'Active Listening',        'Communication',        'Did they listen carefully, acknowledge concerns and avoid unnecessary interruptions or assumptions?',
+  'Did they listen carefully, acknowledge concerns and avoid unnecessary interruptions or assumptions?', true, NULL, NULL, NULL, NULL, NULL),
+ (s.id(33,5),  NULL, 5,  NULL, 'Technical Understanding', 'Technical Evaluation', 'Did they demonstrate relevant understanding of engineering, CNC machining, fabrication, materials and manufacturing feasibility?',
+  'Did they demonstrate relevant understanding of engineering, CNC machining, fabrication, materials and manufacturing feasibility?', true, NULL, s.id(1,1), NULL, NULL, NULL),
+ (s.id(33,6),  NULL, 6,  NULL, 'Solution Presentation',   'Solution & Value',     'Did they recommend relevant services and explain how the solution addresses requirements?',
+  'Did they recommend relevant services and explain how the solution addresses requirements?', true, NULL, NULL, NULL, NULL, NULL),
+ (s.id(33,7),  NULL, 7,  NULL, 'Value Proposition',       'Solution & Value',     'Did they communicate differentiators such as capabilities, quality, cost efficiency and delivery benefits?',
+  'Did they communicate differentiators such as capabilities, quality, cost efficiency and delivery benefits?', true, NULL, NULL, NULL, NULL, NULL),
+ (s.id(33,8),  NULL, 8,  NULL, 'Commercial Awareness',    'Commercial',           'Did they explore/address budget, pricing, production volumes, timelines and purchasing requirements?',
+  'Did they explore/address budget, pricing, production volumes, timelines and purchasing requirements?', true, NULL, s.id(1,2), NULL, NULL, NULL),
+ (s.id(33,9),  NULL, 9,  NULL, 'Objection Handling',      'Commercial',           'Did they respond effectively to pricing, quality, delivery, technical feasibility or supplier reliability concerns?',
+  'Did they respond effectively to pricing, quality, delivery, technical feasibility or supplier reliability concerns?', true, NULL, NULL, NULL, NULL, NULL),
+ (s.id(33,10), NULL, 10, NULL, 'Trust & Confidence',      'Communication',        'Did they communicate professionally, provide credible information and build confidence without unsupported claims?',
+  'Did they communicate professionally, provide credible information and build confidence without unsupported claims?', true, NULL, NULL, NULL, NULL, NULL),
+ (s.id(33,11), NULL, 11, NULL, 'Closing & Next Steps',    'Closing & Follow-up',  'Did they move toward a clear next action such as RFQ, drawing submission, quotation, technical review or order?',
+  'Did they move toward a clear next action such as RFQ, drawing submission, quotation, technical review or order?', true, NULL, NULL, NULL, NULL, NULL),
+ (s.id(33,12), NULL, 12, NULL, 'Follow-up Commitment',    'Closing & Follow-up',  'Did they agree clear responsibilities, deliverables and follow-up timelines?',
+  'Did they agree clear responsibilities, deliverables and follow-up timelines?', true, NULL, NULL, NULL, NULL, NULL),
+ -- Apex replaces the default Technical Understanding with its own wording (this is the cue in force for Apex calls)
+ (s.id(33,13), s.id(6,1), NULL, s.id(33,5), 'Technical Understanding (Aerospace & Medical)', 'Technical Evaluation', 'The default cue, tuned for AS9100D aerospace and ISO 13485 medical work.',
+  'Did they show command of titanium and Inconel machining, GD&T tolerances, first-article inspection and the AS9100D / ISO 13485 quality systems?', true, s.id(7,1), NULL, s.id(7,1), NULL, NULL),
+ -- a company's own extra cue, one that is switched off, and one that was deleted
+ (s.id(33,14), s.id(6,1), NULL, NULL, 'Quality & Certification Awareness', 'Custom', 'Does the rep raise quality certificates before the buyer asks?',
+  'Did they mention relevant certificates (AS9100D, ISO 13485, mill test certificates) and offer evidence without being asked?', true, s.id(7,1), NULL, s.id(7,1), NULL, NULL),
+ (s.id(33,15), s.id(6,1), NULL, NULL, 'Export Control Check', 'Custom', NULL,
+  'Did they confirm export control classification for defence-related parts?', false, s.id(7,1), NULL, s.id(7,1), NULL, NULL),
+ (s.id(33,16), s.id(6,1), NULL, NULL, 'Legacy Rapport Check', 'Custom', 'Replaced by the platform Introduction & Rapport cue.',
+  'Did the rep use the buyer''s name in the first 30 seconds?', true, s.id(7,1), NULL, s.id(7,1), '2026-10-20 09:00+00', s.id(7,1)),
+ -- other companies
+ (s.id(33,17), s.id(6,2), NULL, s.id(33,9), 'Objection Handling (short form)', 'Commercial', 'Shorter wording for a small sales team.',
+  'Did they answer the buyer''s main concern in under a minute and check it was settled?', true, s.id(7,10), NULL, s.id(7,10), NULL, NULL),
+ (s.id(33,18), s.id(6,4), NULL, NULL, 'Foundry Process Knowledge', 'Custom', 'Casting methods, alloys and porosity control.',
+  'Did they show understanding of sand and die casting, alloy choice and porosity inspection?', true, s.id(7,17), NULL, s.id(7,17), NULL, NULL);
